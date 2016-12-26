@@ -18,6 +18,6 @@ function Memory:getContentWeightings(key, beta)
 	local expKey = key:repeatTensor(self.nbLocation,1)
 	local c = nn.CosineDistance()
 	local e = nn.SoftMax()
-	w = beta * c:forward({self.mem, expKey})
+	local w = beta * c:forward({self.mem, expKey})
 	return e:forward (w)
 end
