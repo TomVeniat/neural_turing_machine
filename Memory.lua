@@ -19,5 +19,5 @@ function Memory:getContentWeightings(key, beta)
 	local c = nn.CosineDistance()
 	local e = nn.SoftMax()
 	local w = beta * c:forward({self.mem, expKey})
-	return e:forward (w)
+	return e:forward(w)
 end
