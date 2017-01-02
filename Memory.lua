@@ -21,3 +21,27 @@ function Memory:getContentWeightings(key, beta)
 	local w = beta * c:forward({self.mem, expKey})
 	return e:forward(w)
 end
+
+function Memory:shiftWeigthing(weights, st)
+	-- assert(st:size(1)==3, 'Only -1, 0 and 1 shifts are allowed for now')
+	size = weights:size(2)
+	print(st)
+	shiftMat = torch.zeros(size,size)
+
+	for i=0,size-1 do
+		print(i)
+		for s, val in pairs(st) do
+			local index = math.fmod(i + s + size, size) + 1 
+			print(index)
+			shiftMat[{{index},{i+1}}] = val
+		end
+	end
+
+	return weights * shiftMat
+
+end
+
+function Memory:blendWeightings(prevWeights, contentWeights, gate)
+	local gatedWeigths = gate * contentWeights + (1 - gate) * prevWeights
+	return gatedWeigths
+end

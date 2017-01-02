@@ -41,3 +41,18 @@ xs,ys = createCopyDataSet(10,4)
 
 print(xs)
 print(ys)
+
+print()
+
+
+s = {}
+s[0] = 0.05
+s[-1] = 0.9
+s[-2] = 0.05
+
+r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
+
+
+print(m:shiftWeigthing(r, s))
+
+
