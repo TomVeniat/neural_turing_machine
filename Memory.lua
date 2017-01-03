@@ -45,3 +45,8 @@ function Memory:blendWeightings(prevWeights, contentWeights, gate)
 	local gatedWeigths = gate * contentWeights + (1 - gate) * prevWeights
 	return gatedWeigths
 end
+
+function Memory:sharpenWeigths(weights, gamma)
+	local w = torch.Tensor(weights:size()):copy(weights):pow(gamma)
+	return w / w:sum()	
+end

@@ -52,7 +52,14 @@ s[-2] = 0.05
 
 r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
 
+shifted = m:shiftWeigthing(r, s)
+print(shifted)
 
-print(m:shiftWeigthing(r, s))
+
+r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
+
+sharpened = m:sharpenWeigths(r,2)
+
+print(sharpened)
 
 
