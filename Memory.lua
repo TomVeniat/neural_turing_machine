@@ -50,3 +50,14 @@ function Memory:sharpenWeigths(weights, gamma)
 	local w = torch.Tensor(weights:size()):copy(weights):pow(gamma)
 	return w / w:sum()	
 end
+
+function Memory:erase(weights, erase)
+	self.mem = self.mem:cmul(torch.ones(self.mem:size()) - weights * erase)
+	return self.mem
+end
+
+function Memory:add(weights, add)
+	self.mem = self.mem + weights * add
+	return self.mem
+end
+

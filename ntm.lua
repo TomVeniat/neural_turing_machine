@@ -62,4 +62,10 @@ sharpened = m:sharpenWeigths(r,2)
 
 print(sharpened)
 
+e = torch.Tensor({0,1}):resize(1,2)
 
+print(m.mem)
+m:erase(r:t(),e)
+print(m.mem)
+m:add(r:t(),e)
+print(m.mem)
