@@ -16,10 +16,16 @@ function Memory:getContentWeightings(key, beta)
 	assert(key:size(1)==1 and key:size(2)==self.locationSize, 'Content adressing Key must be 1xM')
 	assert(beta > 0 , string.format('Key strength must be greater than zero (here : %d)',beta))
 	local expKey = key:repeatTensor(self.nbLocation,1)
-	local c = nn.CosineDistance()
-	local e = nn.SoftMax()
-	local w = beta * c:forward({self.mem, expKey})
-	return e:forward(w)
+
+	local in_mem = nn.Identity()()
+	local in_key = nn.Identity()()
+
+	local c = nn.CosineDistance()({in_mem,in_key})
+	local e = nn.SoftMax()(nn.MulConstant(beta)(c))
+	-- local w = beta * c:forward({self.mem, expKey})
+
+	local g = nn.gModule({in_mem,in_key},{e})
+	return g:forward({self.mem, expKey})
 end
 
 function Memory:shiftWeigthing(weights, st)
