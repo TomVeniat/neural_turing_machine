@@ -2,6 +2,7 @@ require 'nn'
 require 'nngraph'
 require 'Memory'
 require 'modules/Logging'
+require 'modules/MulScalar'
 
 function createSample(sampleSize)
 	local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
@@ -167,15 +168,7 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local dist = nn.Logging('dist')(nn.CosineDistance()({in_mem,full_k}))
 
-	local betas = {}
-
-	for i=1,self.mem_locations do
-		betas[i] = nn.Logging('betas',false)(beta_t)
-	end	
-
-	local full_b = nn.Logging('betas')(nn.JoinTable(2)(betas))
-
-	local w_c = nn.Logging('weights')(nn.SoftMax()(nn.Logging('Mult')(nn.CMulTable()({full_b,dist}))))
+	local w_c = nn.SoftMax()(nn.MulScalar()({beta_t,dist}))
 
 	local r = nn.Logging('read')(nn.MixtureTable(1)({w_c,in_mem}))
 
@@ -225,6 +218,3 @@ print(nt.mem)
 
 -- nngraph.annotateNodes()
 print(nt:forward(torch.Tensor{1,2,3}:resize(1,3)))
-
-
-print( nn.Logging()())
