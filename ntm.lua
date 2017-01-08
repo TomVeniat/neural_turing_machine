@@ -1,6 +1,7 @@
 require 'nn'
 require 'nngraph'
 require 'Memory'
+require 'modules/Logging'
 
 function createSample(sampleSize)
 	local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
@@ -92,9 +93,9 @@ function NTM:__init(nInput, nOutput)
 	nngraph.setDebug(true)
 	self.input_size = 3
 	self.output_size = 3
-	self.mem_locations = 10
+	self.mem_locations = 3
 	self.mem_location_size = 5
-	self.hidden_state_size = 100
+	self.hidden_state_size = 80
 	self.allowed_shifts = {-1,0,1}
 
 	self.mem = torch.range(1, self.mem_locations * self.mem_location_size):resize(self.mem_locations, self.mem_location_size)
@@ -134,13 +135,16 @@ function NTM:init_controller()
 
 	nngraph.annotateNodes()
 	self.ctrl = nn.gModule(inputs, outputs)
+	self.ctrl.name = 'gra'
+
+	graph.dot(self.ctrl.fg, 'Forward Graph', 'Forward Graph')
 
 end
 
 function NTM:create_head(h_state, prev_w, mem)
-	-- k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+	k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
 
-	-- beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
+	beta_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 	-- g_t = nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state))
 
@@ -149,33 +153,42 @@ function NTM:create_head(h_state, prev_w, mem)
 	-- gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 
-	-- local in_mem = nn.Identity()(mem)
-	-- local in_key = nn.Identity()(k_t)
+	local in_mem = nn.Identity()(mem)
+	local in_key = nn.Identity()(k_t)
 
-	-- local dimensions = {}
+	local dimensions = {}
 
-	-- for i=1,self.mem_locations do
-	-- 	dimensions[i] = nn.Identity()(in_key)
-	-- end
+	for i=1,self.mem_locations do
+		dimensions[i] = nn.Identity()(in_key)
+	end
 
-	-- local full_k = nn.JoinTable(1)(dimensions)
+	local full_k = nn.JoinTable(1)(dimensions)
 
 
-	-- local dist = nn.CosineDistance()({in_mem,full_k})
-	-- local w_c = nn.SoftMax()(nn.CMulTable()({beta_t,dist}))
+	local dist = nn.Logging('dist')(nn.CosineDistance()({in_mem,full_k}))
 
-	-- local r = nn.MixtureTable()({w_c,in_mem})
+	local betas = {}
+
+	for i=1,self.mem_locations do
+		betas[i] = nn.Logging('betas',false)(beta_t)
+	end	
+
+	local full_b = nn.Logging('betas')(nn.JoinTable(2)(betas))
+
+	local w_c = nn.Logging('weights')(nn.SoftMax()(nn.Logging('Mult')(nn.CMulTable()({full_b,dist}))))
+
+	local r = nn.Logging('read')(nn.MixtureTable(1)({w_c,in_mem}))
 
 	local new_mem = nn.Identity()(mem)
 
-	local new_w = nn.Linear(self.hidden_state_size, self.mem_locations)(h_state)
+	-- local new_w = nn.Linear(self.hidden_state_size, self.mem_locations)(h_state)
 
-	local r = nn.MixtureTable()({new_w,new_mem})
+	-- local r = nn.MixtureTable()({new_w,new_mem})
 
-	-- return new_mem, w_c, r
-	return new_mem, new_w, r
+	nngraph.annotateNodes()
+	return new_mem, w_c, r
+	-- return new_mem, new_w, r
 
-	-- return mem, prev_w, nn.MixtureTable()({w_c,in_mem})
 
 end
 
@@ -209,8 +222,9 @@ end
 nt = nn.NTM()
 
 print(nt.mem)
-print(nt.ctrl)
 
 -- nngraph.annotateNodes()
--- graph.dot(nt.ctrl, 'Forward Graph')
-print(nt:forward(torch.Tensor{1,2,3}))
+print(nt:forward(torch.Tensor{1,2,3}:resize(1,3)))
+
+
+print( nn.Logging()())
