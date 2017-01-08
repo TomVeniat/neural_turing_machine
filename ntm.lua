@@ -3,6 +3,7 @@ require 'nngraph'
 require 'Memory'
 require 'modules/Logging'
 require 'modules/MulScalar'
+require 'modules/ConcatTensor'
 
 function createSample(sampleSize)
 	local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
@@ -157,14 +158,7 @@ function NTM:create_head(h_state, prev_w, mem)
 	local in_mem = nn.Identity()(mem)
 	local in_key = nn.Identity()(k_t)
 
-	local dimensions = {}
-
-	for i=1,self.mem_locations do
-		dimensions[i] = nn.Identity()(in_key)
-	end
-
-	local full_k = nn.JoinTable(1)(dimensions)
-
+	local full_k = nn.ConcatTensor(self.mem_locations)(in_key)
 
 	local dist = nn.Logging('dist')(nn.CosineDistance()({in_mem,full_k}))
 
@@ -211,6 +205,9 @@ function NTM:forward(input)
 
 	return self.outputs[self.seq_step][1]
 end
+
+sep = '-'
+print(sep:rep(30))
 
 nt = nn.NTM()
 
