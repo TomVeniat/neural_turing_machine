@@ -37,6 +37,10 @@ function Shifter:updateOutput(input)
 	local weights = input[1]
 	local shifts = input[2]
 
+	if shifts:dim() == 2 then
+		shifts = shifts:view(shifts:size(2))
+	end
+
 	local size
 	if weights:dim() == 2 then
 		size = weights:size(2)
