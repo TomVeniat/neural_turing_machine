@@ -6,6 +6,7 @@ require 'modules/MulScalar'
 require 'modules/ConcatTensor'
 require 'modules/Shifter'
 require 'modules/PowScalar'
+require 'modules/Resizer'
 
 require 'modules/Hijack'
 
@@ -99,8 +100,8 @@ function NTM:__init(nInput, nOutput)
 	nngraph.setDebug(true)
 	self.input_size = 3
 	self.output_size = 3
-	self.mem_locations = 7
-	self.mem_location_size = 5
+	self.mem_locations = 120
+	self.mem_location_size = 20
 	self.hidden_state_size = 80
 	self.allowed_shifts = {-1,0,1}
 
@@ -121,7 +122,7 @@ function NTM:init_controller()
 
 	local prev_mem = nn.Identity()()
 	local prev_wr = nn.Identity()()
-	local prec_ww = nn.Identity()()
+	local prev_ww = nn.Identity()()
 
 	local prev_r = nn.Identity()()
 
@@ -130,13 +131,15 @@ function NTM:init_controller()
 
 	local ctrl = nn.Linear(self.hidden_state_size, self.hidden_state_size)(nn.CAddTable()({in_h,r_h}))
 
-	local mem, wr, r = self:create_head(ctrl,prev_wr,prev_mem)
+	local mem, r, wr = self:create_read_head(ctrl,prev_wr,prev_mem)
+
+	local mem, ww = self:create_write_head(ctrl,prev_ww,prev_mem)
 
 	local output = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.output_size)(ctrl))
 
-	local inputs = {input, prev_mem, prev_wr, prev_r}
+	local inputs = {input, prev_mem, prev_ww, prev_r, prev_wr}
 	-- local inputs = {input, prev_mem, prev_r}
-	local outputs = {output, mem, wr, r}
+	local outputs = {output, mem, ww, r, wr}
 
 
 	nngraph.annotateNodes()
@@ -147,16 +150,40 @@ function NTM:init_controller()
 
 end
 
+function NTM:create_read_head(h_state, prev_w, mem)
+
+	local w = self:create_head(h_state, prev_w, mem)
+
+	local r = nn.Logging('read')(nn.MixtureTable(1)({w,mem}))
+
+	return mem, r, w
+end
+
+function NTM:create_write_head(h_state, prev_w, mem)
+
+	local w = self:create_head(h_state, prev_w, mem)
+
+	local e = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+	local erasure = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.Resizer({self.mem_locations,1})(w),e}))) 
+
+	local a = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+	local addition = nn.MM()({nn.Resizer({self.mem_locations,1})(w),a})
+
+	local new_mem = nn.CAddTable()({nn.CMulTable()({mem, erasure}),addition})
+	nngraph.annotateNodes()
+	return new_mem, w
+end
+
 function NTM:create_head(h_state, prev_w, mem)
-	k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+	local k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
 
-	beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
+	local beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
 
-	g_t = nn.Logging('gate')(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+	local g_t = nn.Logging('gate')(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
-	s_t = nn.Hijack(torch.Tensor{0,0,1})(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))
+	local s_t = nn.Hijack(torch.Tensor{0,0,1})(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))
 
-	gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 
 	local in_mem = nn.Identity()(mem)
@@ -176,16 +203,14 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local w = nn.Logging('w')(nn.PowScalar()({gamma_t, w_s}))
 
-	local r = nn.Logging('read')(nn.MixtureTable(1)({w,in_mem}))
-
-	local new_mem = nn.Identity()(mem)
+	
 
 	-- local new_w = nn.Linear(self.hidden_state_size, self.mem_locations)(h_state)
 
 	-- local r = nn.MixtureTable()({new_w,new_mem})
 
 	nngraph.annotateNodes()
-	return new_mem, w_c, r
+	return w
 	-- return new_mem, new_w, r
 
 
@@ -194,9 +219,10 @@ end
 function NTM:getFirstInputs()
 
 	local wr = nn.SoftMax():forward(torch.rand(self.mem_locations))
+	local ww = nn.SoftMax():forward(torch.rand(self.mem_locations))
 	local lin = nn.Linear(1,self.mem_location_size):forward(torch.Tensor({0}))
 	local r = nn.Tanh():forward(lin)
-	return {0, self.mem, wr, r}
+	return {0, self.mem, ww,r, wr}
 	-- return {0, self.mem, r}
 
 end
@@ -216,6 +242,8 @@ function NTM:forward(input)
 	print(inputs)
 
 	self.outputs[self.seq_step] = self.ctrl:forward(inputs)
+
+	print(self.outputs[self.seq_step])
 
 	return self.outputs[self.seq_step][1]
 end
