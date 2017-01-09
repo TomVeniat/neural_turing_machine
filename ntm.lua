@@ -10,87 +10,6 @@ require 'modules/Resizer'
 
 require 'modules/Hijack'
 
-function createSample(sampleSize)
-	local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
-
-	return torch.Tensor():rand(sampleSize):gt(0.5):double()
-end
-
-function createCopyDataSet(nSample, sampleSize)
-	local x = torch.zeros(nSample+2, sampleSize+2)
-	local y = torch.zeros(nSample, sampleSize)
-	for i=1,nSample do
-		local sample = createSample(sampleSize)
-		x[{{i+1},{}}] = torch.cat(sample, torch.Tensor({0,0}))
-		y[{{i},{}}] = sample
-	end
-
-	x[{{1},{sampleSize + 1}}] = 1
-	x[{{nSample+2},{sampleSize + 2}}] = 1
-
-	return x, y
-end
-
-
-
-
-m = Memory(5,2)
-print(m.mem)
-
-r = torch.Tensor({0.9,0.1,0,0,0})
-print(r:resize(1,5))
-print(m:read(r))
-
-
-r = torch.Tensor({1,2}):resize(1,2)
-print(m:getContentWeightings(r,120))
-
-
-xs,ys = createCopyDataSet(10,4)
-
-print(xs)
-print(ys)
-print(m.mem)
-
-print()
-
-
-s = {}
-s[0] = 0.05
-s[-1] = 0.9
-s[-2] = 0.05
-
-r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
-
-shifted = m:shiftWeigthing(r, s)
-print(shifted)
-
-
-r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
-
-sharpened = m:sharpenWeigths(r,2)
-
-print(sharpened)
-
-e = torch.Tensor({0,1}):resize(1,2)
-
-print(m.mem)
-m:erase(r:t(),e)
-print(m.mem)
-m:add(r:t(),e)
-print(m.mem)
-
-a = torch.Tensor({0,1,1,0,1})
-b = torch.Tensor({0,0,1,0,1})
-c = torch.Tensor({0,1,1,0,0})
-d = torch.Tensor({-700,12,123,-14,6})
-e = torch.Tensor({-700,-45,123,-14,6})
-
-
-criterion = nn.BCECriterion()
-
-
-
 local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
 function NTM:__init(nInput, nOutput)
@@ -154,7 +73,7 @@ function NTM:create_read_head(h_state, prev_w, mem)
 
 	local w = self:create_head(h_state, prev_w, mem)
 
-	local r = nn.Logging('read')(nn.MixtureTable(1)({w,mem}))
+	local r = nn.Logging('read',false)(nn.MixtureTable(1)({w,mem}))
 
 	return mem, r, w
 end
@@ -179,7 +98,7 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
 
-	local g_t = nn.Logging('gate')(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 	local s_t = nn.Hijack(torch.Tensor{0,0,1})(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))
 
@@ -191,17 +110,17 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local dist = nn.CosineDistance()({in_mem,nn.ConcatTensor(self.mem_locations)(in_key)})
 
-	local w_c = nn.Logging('w_c')(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
+	local w_c = nn.Logging('w_c',false)(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
 
 	-- local gt_c = nn.
 	local w_g1 = nn.MulScalar()({g_t, w_c})
-	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev')(prev_w)})
+	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev',false)(prev_w)})
 
-	local w_g = nn.Logging('w_g')(nn.CAddTable()({w_g1,w_g2}))
+	local w_g = nn.Logging('w_g',false)(nn.CAddTable()({w_g1,w_g2}))
 
-	local w_s = nn.Logging('w_s')(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
+	local w_s = nn.Logging('w_s',false)(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
 
-	local w = nn.Logging('w')(nn.PowScalar()({gamma_t, w_s}))
+	local w = nn.Logging('w',false)(nn.PowScalar()({gamma_t, w_s}))
 
 	
 
@@ -239,7 +158,7 @@ function NTM:forward(input)
 	end
 	inputs[1] = input
 
-	print(inputs)
+	-- print(inputs)
 
 	self.outputs[self.seq_step] = self.ctrl:forward(inputs)
 
@@ -247,13 +166,3 @@ function NTM:forward(input)
 
 	return self.outputs[self.seq_step][1]
 end
-
-sep = '-'
-print(sep:rep(30))
-
-nt = nn.NTM()
-
-print(nt.mem)
-
--- nngraph.annotateNodes()
-print(nt:forward(torch.Tensor{1,2,3}:resize(1,3)))
