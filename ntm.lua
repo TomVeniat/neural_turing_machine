@@ -4,6 +4,10 @@ require 'Memory'
 require 'modules/Logging'
 require 'modules/MulScalar'
 require 'modules/ConcatTensor'
+require 'modules/Shifter'
+require 'modules/PowScalar'
+
+require 'modules/Hijack'
 
 function createSample(sampleSize)
 	local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
@@ -95,7 +99,7 @@ function NTM:__init(nInput, nOutput)
 	nngraph.setDebug(true)
 	self.input_size = 3
 	self.output_size = 3
-	self.mem_locations = 3
+	self.mem_locations = 7
 	self.mem_location_size = 5
 	self.hidden_state_size = 80
 	self.allowed_shifts = {-1,0,1}
@@ -130,8 +134,8 @@ function NTM:init_controller()
 
 	local output = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.output_size)(ctrl))
 
-	-- local inputs = {input, prev_mem, prev_wr, prev_r}
-	local inputs = {input, prev_mem, prev_r}
+	local inputs = {input, prev_mem, prev_wr, prev_r}
+	-- local inputs = {input, prev_mem, prev_r}
 	local outputs = {output, mem, wr, r}
 
 
@@ -146,25 +150,33 @@ end
 function NTM:create_head(h_state, prev_w, mem)
 	k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
 
-	beta_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+	beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
 
-	-- g_t = nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state))
+	g_t = nn.Logging('gate')(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
-	-- s_t = nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))
+	s_t = nn.Hijack(torch.Tensor{0,0,1})(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))
 
-	-- gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+	gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 
 	local in_mem = nn.Identity()(mem)
 	local in_key = nn.Identity()(k_t)
 
-	local full_k = nn.ConcatTensor(self.mem_locations)(in_key)
+	local dist = nn.CosineDistance()({in_mem,nn.ConcatTensor(self.mem_locations)(in_key)})
 
-	local dist = nn.Logging('dist')(nn.CosineDistance()({in_mem,full_k}))
+	local w_c = nn.Logging('w_c')(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
 
-	local w_c = nn.SoftMax()(nn.MulScalar()({beta_t,dist}))
+	-- local gt_c = nn.
+	local w_g1 = nn.MulScalar()({g_t, w_c})
+	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev')(prev_w)})
 
-	local r = nn.Logging('read')(nn.MixtureTable(1)({w_c,in_mem}))
+	local w_g = nn.Logging('w_g')(nn.CAddTable()({w_g1,w_g2}))
+
+	local w_s = nn.Logging('w_s')(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
+
+	local w = nn.Logging('w')(nn.PowScalar()({gamma_t, w_s}))
+
+	local r = nn.Logging('read')(nn.MixtureTable(1)({w,in_mem}))
 
 	local new_mem = nn.Identity()(mem)
 
@@ -184,8 +196,8 @@ function NTM:getFirstInputs()
 	local wr = nn.SoftMax():forward(torch.rand(self.mem_locations))
 	local lin = nn.Linear(1,self.mem_location_size):forward(torch.Tensor({0}))
 	local r = nn.Tanh():forward(lin)
-	-- return {0, self.mem, wr, r}
-	return {0, self.mem, r}
+	return {0, self.mem, wr, r}
+	-- return {0, self.mem, r}
 
 end
 
@@ -200,6 +212,8 @@ function NTM:forward(input)
 		inputs = self.outputs[self.seq_step - 1]
 	end
 	inputs[1] = input
+
+	print(inputs)
 
 	self.outputs[self.seq_step] = self.ctrl:forward(inputs)
 
