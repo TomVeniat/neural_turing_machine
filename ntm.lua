@@ -12,17 +12,17 @@ require 'modules/Hijack'
 
 local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
-function NTM:__init(nInput, nOutput)
+function NTM:__init(nInput, nOutput, params)
 	Parent.__init(self)
 
 	print ('INIT ntm')
 	nngraph.setDebug(true)
-	self.input_size = 3
-	self.output_size = 3
-	self.mem_locations = 120
-	self.mem_location_size = 20
-	self.hidden_state_size = 80
-	self.allowed_shifts = {-1,0,1}
+	self.input_size = params.input_size or 3
+	self.output_size = params.output_size or 3
+	self.mem_locations = params.mem_locations or 50
+	self.mem_location_size = params.mem_location_size or 3
+	self.hidden_state_size = params.hidden_state_size or 80
+	self.allowed_shifts = params.allowed_shifts or {-1,0,1}
 
 	self.mem = torch.range(1, self.mem_locations * self.mem_location_size):resize(self.mem_locations, self.mem_location_size)
 
@@ -31,8 +31,7 @@ function NTM:__init(nInput, nOutput)
 
 	self.outputs = {}
 
-	self.seq_step = 0
-
+	self.sequence_step = 0
 
 end
 
@@ -148,21 +147,21 @@ end
 
 function NTM:forward(input)
 
-	self.seq_step = self.seq_step + 1
+	self.sequence_step = self.sequence_step + 1
 
 	local inputs 
-	if self.seq_step == 1 then
+	if self.sequence_step == 1 then
 		inputs = self:getFirstInputs()
 	else
-		inputs = self.outputs[self.seq_step - 1]
+		inputs = self.outputs[self.sequence_step - 1]
 	end
 	inputs[1] = input
 
 	-- print(inputs)
 
-	self.outputs[self.seq_step] = self.ctrl:forward(inputs)
+	self.outputs[self.sequence_step] = self.ctrl:forward(inputs)
 
-	print(self.outputs[self.seq_step])
+	print(self.outputs[self.sequence_step])
 
-	return self.outputs[self.seq_step][1]
+	return self.outputs[self.sequence_step][1]
 end

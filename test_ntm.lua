@@ -86,9 +86,25 @@ criterion = nn.BCECriterion()
 sep = '-'
 print(sep:rep(30))
 
-nt = nn.NTM()
+params = {
+	input_size = 4,
+	output_size = 5,
+	mem_locations = 50,
+	mem_location_size = 2,
+	hidden_state_size = 80,
+	allowed_shifts = {-1,0,1}
+}
+
+nt = nn.NTM(nil,nil,params)
 
 print(nt.mem)
 
 -- nngraph.annotateNodes()
-print(nt:forward(torch.Tensor{1,2,3}:resize(1,3)))
+
+t = 100
+
+for i=1,t do
+	local sample = createSample(3)
+end
+
+print(nt:forward(torch.Tensor{1,2,3,4}:resize(1,4)))
