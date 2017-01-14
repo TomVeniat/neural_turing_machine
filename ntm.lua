@@ -12,7 +12,7 @@ require 'modules/Hijack'
 
 local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
-function NTM:__init(nInput, nOutput, params)
+function NTM:__init( params)
 	Parent.__init(self)
 
 	print ('INIT ntm')
@@ -145,23 +145,42 @@ function NTM:getFirstInputs()
 
 end
 
+function copy_table(tab)
+	local res = {}
+	for i,v in ipairs(tab) do
+		res[i] = v
+	end
+	return res
+end
+
+function copy_tensor_table(tab)
+	local res = {}
+	for i=1,#tab do
+		res[i] = tab[i]:clone()
+	end
+	return res
+end
+
 function NTM:forward(input)
 
 	self.sequence_step = self.sequence_step + 1
 
-	local inputs 
 	if self.sequence_step == 1 then
 		inputs = self:getFirstInputs()
 	else
-		inputs = self.outputs[self.sequence_step - 1]
+		inputs = copy_table(self.outputs[self.sequence_step - 1])
 	end
 	inputs[1] = input
 
-	-- print(inputs)
-
-	self.outputs[self.sequence_step] = self.ctrl:forward(inputs)
-
-	print(self.outputs[self.sequence_step])
+	self.outputs[self.sequence_step] = copy_tensor_table(self.ctrl:forward(inputs))
 
 	return self.outputs[self.sequence_step][1]
+end
+
+function NTM:backward(input, gradOutput)
+
+	self.sequence_step = self.sequence_step - 1
+
+	
+	return nil
 end
