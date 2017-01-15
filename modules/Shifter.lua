@@ -66,6 +66,10 @@ function Shifter:updateGradInput(input, gradOutput)
 		size = weights:size(1)
 	end
 
+	if shifts:dim() == 2 then
+		shifts = shifts:view(shifts:size(2))
+	end
+
 	local shiftMat = self:buildShiftMat(shifts,size)
 
 	self.gradInput = {}
