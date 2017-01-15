@@ -2,6 +2,59 @@ require 'nn'
 require 'nngraph'
 require 'Memory'
 require 'ntm'
+require 'optim'
+
+function rmsprop(opfunc, x, config, state)
+  if config == nil and state == nil then
+    error('no state provided')
+  end
+  local config = config or {}
+  local state = state or config
+  local decay = config.decay or 0.95
+  local lr = config.learningRate or 1e-4
+  local momentum = config.momentum or 0.9
+  local epsilon = config.epsilon or 1e-4
+  state.evalCounter = state.evalCounter or 0
+  state.gradAccum = state.gradAccum or torch.Tensor():typeAs(x):resizeAs(x):zero()
+  state.gradSqAccum = state.gradSqAccum or torch.Tensor():typeAs(x):resizeAs(x):zero()
+  state.update = state.update or torch.Tensor():typeAs(x):resizeAs(x):zero()
+  state.gradRms = state.gradRms or torch.Tensor():typeAs(x):resizeAs(x)
+
+  -- evaluate f(x) and df(x)/dx
+  local fx, dfdx = opfunc(x)
+
+  -- accumulate gradients and squared gradients
+  -- g_t = d * g_{t-1} + (1 - d) (df/dx)
+  state.gradAccum:mul(decay):add(1 - decay, dfdx)
+  -- n_t = d * n_{t-1} + (1 - d) (df/dx)^2
+  state.gradSqAccum:mul(decay):add(1 - decay, torch.cmul(dfdx, dfdx))
+
+  -- g_t = d * g_{t-1} + (df/dx)
+  --state.gradAccum:mul(decay):add(dfdx)
+  -- n_t = d * n_{t-1} + (df/dx)^2
+  --state.gradSqAccum:mul(decay):add(torch.cmul(dfdx, dfdx))
+
+  -- compute RMS
+  -- r_t = \sqrt{ n_t - g_t^2 + \eps }
+  state.gradRms:copy(state.gradSqAccum)
+    :add(-1, torch.cmul(state.gradAccum, state.gradAccum))
+    :add(epsilon)
+    :sqrt()
+
+  -- compute update
+  -- \Delta_t = m * \Delta_{t-1} - \eta * (df/dx) / r_t
+  state.update:mul(momentum):add(-lr, torch.cdiv(dfdx, state.gradRms))
+
+  -- apply update
+  x:add(state.update)
+
+  -- (7) update evaluation counter
+  state.evalCounter = state.evalCounter + 1
+
+  -- return x*, f(x) before optimization
+  return x, {fx}
+end
+
 
 function createSample(sampleSize, start_tag, end_tag)
 	-- local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
@@ -10,6 +63,7 @@ function createSample(sampleSize, start_tag, end_tag)
 		res = torch.zeros(unpack(sampleSize))
 	else 
 		res = torch.Tensor():rand(unpack(sampleSize)):gt(0.5):double()
+		-- return torch.zeros(unpack(sampleSize))
 	end
 
 	res[1][-2] = start_tag and 1 or 0
@@ -89,18 +143,18 @@ end
 -- e = torch.Tensor({-700,-45,123,-14,6})
 
 
--- criterion = nn.BCECriterion()
+-- 
 
 
 sep = '-'
 print(sep:rep(30))
 
 params = {
-	input_size = 7,
-	output_size = 7,
-	mem_locations = 10,
-	mem_location_size = 15,
-	hidden_state_size = 80,
+	input_size = 5,
+	output_size = 5,
+	mem_locations = 3,
+	mem_location_size = 10,
+	hidden_state_size = 100,
 	allowed_shifts = {-1,0,1}
 }
 
@@ -111,21 +165,83 @@ nt = nn.NTM(params)
 
 -- xs, ys = createCopyDataSet(50,3)
 
-local t = 5
+local t = 100000
 local inputs = {}
 local outputs = {}
+
+local criterion = nn.BCECriterion()
+
+
+params, grads = nt.ctrl:getParameters() 
+print (params:mean())
+print (grads:mean())
+
+local rmsprop_state = {
+  learningRate = 1e-4,
+  momentum = 0.9,
+  decay = 0.95
+}
+
+local begin_flag = createSample({1,5},true, false)
+local end_flag = createSample({1,5},false, true)
+
 for i=1,t do
-	local sample = createSample({1,7},false, false)
-	inputs[i] = sample
-	outputs[i] = nt:forward(sample)
+	local feval = function(x)
+		-- print('feval')
+		-- print(grads:max())
+		nt.ctrl:zeroGradParameters()
+		-- print(grads:max())
+		nt:forward(begin_flag)
+		local real_sample = createSample({1,5},false, false)
+		nt:forward(real_sample)
+		nt:forward(end_flag)
+		
+		local zeros = torch.zeros(1,5)
+		out = nt:forward(zeros)
+
+		err = criterion:forward(out,real_sample)
+		
+		grad = criterion:backward(out, real_sample)
+		
+		nt:backward(zeros,grad)
+		-- print (grad)
+		nt:backward(end_flag,zeros)
+		nt:backward(real_sample,zeros)
+		nt:backward(begin_flag,zeros)
+ 		
+		grads:clamp(-10,10)
+		if i % 100 == 0 then
+			print ('\n' .. i)
+			print(real_sample)
+			print(out)
+			print(err)
+			print(grads:max())
+			print(grads:min())
+		end
+		return err, grads
+		-- nt.ctrl:updateParameters(0.0001)
+	end
+	-- feval()
+	rmsprop(feval, params, rmsprop_state)
+	-- print(grad) 
 	-- outputs[i] = nt:forward(torch.Tensor{1,2,3,4,5}:resize(1,5))
 end
 
-for i=1,#outputs do
-	print(inputs[i])
-end
-for i=1,#outputs do
-	print(nt.outputs[i][1])
-end
+-- for i=1,#outputs do
+-- 	nt.ctrl:zeroGradParameters()
+-- 	print('\nInput :')
+-- 	print(inputs[i])
+-- 	print('Output :')
+-- 	print(outputs[i])
+-- 	print('Err :')
+-- 	print(criterion:forward(inputs[i], outputs[i]))
+-- 	print('grad outs :')
+-- 	print(criterion:backward(inputs[i], outputs[i]))
+-- 	print('grad ins:')
+-- 	print(nt:backward(inputs[i], criterion:backward(inputs[i], outputs[i])))
+-- 	-- nt.ctel
+-- end
+-- local sample = createSample({1,7},false, false)
+-- print(nt:forward(sample))
 
-print(nt.outputs)
+-- -- print(nt.outputs)

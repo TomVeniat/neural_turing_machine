@@ -28,6 +28,8 @@ function NTM:__init( params)
 
 	self.controller = nil
 	self:init_controller()
+	self.initilizer = nil
+	self:init_initializer()
 
 	self.outputs = {}
 
@@ -99,7 +101,8 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
-	local s_t = nn.Hijack(torch.Tensor{0,0,1})(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))
+	local s_t = nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))
+	-- local s_t = nn.Logging('Jacked shifts')(nn.Hijack(torch.Tensor{0,0,1}:view(1,3))(nn.Logging('Shifts')(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))))
 
 	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
@@ -116,6 +119,7 @@ function NTM:create_head(h_state, prev_w, mem)
 	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev',false)(prev_w)})
 
 	local w_g = nn.Logging('w_g',false)(nn.CAddTable()({w_g1,w_g2}))
+
 
 	local w_s = nn.Logging('w_s',false)(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
 
@@ -135,13 +139,37 @@ function NTM:create_head(h_state, prev_w, mem)
 end
 
 function NTM:getFirstInputs()
-
+	local input = nn.Identity()()
+	local mem_mod = nn.Resizer({self.mem_locations,self.mem_location_size})(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
+	local mem = nn.gModule({input},{mem_mod}):forward(torch.Tensor({0}))
 	local wr = nn.SoftMax():forward(torch.rand(self.mem_locations))
 	local ww = nn.SoftMax():forward(torch.rand(self.mem_locations))
 	local lin = nn.Linear(1,self.mem_location_size):forward(torch.Tensor({0}))
 	local r = nn.Tanh():forward(lin)
-	return {0, self.mem, ww,r, wr}
-	-- return {0, self.mem, r}
+	return {0, mem, ww,r, wr}
+
+end
+
+function NTM:init_initializer()
+	local input = nn.Identity()()
+
+	local mem = nn.Resizer({self.mem_locations,self.mem_location_size})(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
+	local wr = nn.SoftMax()(nn.Linear(1,self.mem_locations)(input))
+	local ww = nn.SoftMax()(nn.Linear(1,self.mem_locations)(input))
+	local r = nn.Tanh()(nn.Linear(1,self.mem_location_size)(input))
+
+
+
+	self.initilizer = nn.gModule({input},{nn.Identity()(input),mem,ww,r,wr})
+end
+
+function NTM:getFirstGradInputs()
+
+	local mem_grad = torch.zeros(self.mem_locations, self.mem_location_size)
+	local ww_grad = torch.zeros(self.mem_locations)
+	local r_grad = torch.zeros(self.mem_location_size)
+	local wr_grad = torch.zeros(self.mem_locations)
+	return {0, mem_grad, ww_grad, r_grad, wr_grad}
 
 end
 
@@ -165,8 +193,9 @@ function NTM:forward(input)
 
 	self.sequence_step = self.sequence_step + 1
 
+	local inputs
 	if self.sequence_step == 1 then
-		inputs = self:getFirstInputs()
+		inputs = self.initilizer:forward(torch.Tensor{0})
 	else
 		inputs = copy_table(self.outputs[self.sequence_step - 1])
 	end
@@ -181,6 +210,28 @@ function NTM:backward(input, gradOutput)
 
 	self.sequence_step = self.sequence_step - 1
 
-	
-	return nil
+	local inputs
+	if self.sequence_step == 0 then
+		inputs = self.initilizer:forward(torch.Tensor{0})
+	else
+		inputs = copy_table(self.outputs[self.sequence_step])
+	end
+	inputs[1] = input
+
+	if self.grad_inputs == nil then
+		self.grad_inputs = self:getFirstGradInputs()
+	end
+	self.grad_inputs[1] = gradOutput
+	local grad_outputs = copy_tensor_table(self.grad_inputs)
+
+	local grad_in = self.ctrl:backward(inputs, grad_outputs)
+
+	if self.sequence_step == 0 then
+		self.initilizer:backward(torch.Tensor{0},grad_in)
+	end
+
+	self.gradInputs = grad_in
+
+	return self.gradInputs[1]
 end
+
