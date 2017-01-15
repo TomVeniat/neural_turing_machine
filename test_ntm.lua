@@ -1,6 +1,5 @@
 require 'nn'
 require 'nngraph'
-require 'Memory'
 require 'ntm'
 require 'optim'
 
@@ -165,14 +164,12 @@ nt = nn.NTM(params)
 
 -- xs, ys = createCopyDataSet(50,3)
 
-local t = 100000
-local inputs = {}
-local outputs = {}
+local t = 1000000
+local seq_len = 2	
 
 local criterion = nn.BCECriterion()
 
-
-params, grads = nt.ctrl:getParameters() 
+params, grads = nt:getParameters() 
 print (params:mean())
 print (grads:mean())
 
@@ -187,33 +184,56 @@ local end_flag = createSample({1,5},false, true)
 
 for i=1,t do
 	local feval = function(x)
-		-- print('feval')
-		-- print(grads:max())
-		nt.ctrl:zeroGradParameters()
-		-- print(grads:max())
+		local inputs = {}
+
 		nt:forward(begin_flag)
-		local real_sample = createSample({1,5},false, false)
-		nt:forward(real_sample)
+		for j=1,seq_len do
+			inputs[j] = createSample({1,5},false, false)
+			nt:forward(inputs[j])
+		end
+
 		nt:forward(end_flag)
 		
 		local zeros = torch.zeros(1,5)
-		out = nt:forward(zeros)
+		out = {}
+		out[1] = nt:forward(zeros)
+		out[2] = nt:forward(zeros)
 
-		err = criterion:forward(out,real_sample)
-		
-		grad = criterion:backward(out, real_sample)
-		
-		nt:backward(zeros,grad)
-		-- print (grad)
+		nt:zeroGradParameters()
+
+		err = 0
+		for j=seq_len,1,-1 do
+			err = err + criterion:forward(out[j], inputs[j])
+			grad = criterion:backward(out[j], inputs[j])
+			nt:backward(zeros,grad)
+		end
+
 		nt:backward(end_flag,zeros)
-		nt:backward(real_sample,zeros)
+
+		for j=seq_len,1,-1 do
+			nt:backward(inputs[j],zeros)
+		end
+
 		nt:backward(begin_flag,zeros)
  		
 		grads:clamp(-10,10)
-		if i % 100 == 0 then
+
+		if i % 10 == 0 then
 			print ('\n' .. i)
-			print(real_sample)
-			print(out)
+
+			for j=1,seq_len do
+				print(inputs[j])
+			end
+
+			for j=1,seq_len do
+				print(out[j])
+				local vals_w, inds_w = nt.outputs[j][3]:sort()
+				local vals_r, inds_r = nt.outputs[j][5]:sort()
+				local str = '%d\t%.3f\t\t%d\t%.3f'
+				for k=1,vals_w:size(1) do
+					print(str:format(inds_r[k], vals_r[k], inds_w[k], vals_w[k]))
+				end
+			end
 			print(err)
 			print(grads:max())
 			print(grads:min())
