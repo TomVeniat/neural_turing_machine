@@ -22,5 +22,9 @@ end
 
 function Logging:updateGradInput(input, gradOutput)
 	self.gradInput = gradOutput
+	if self.active then 
+		print(self.name .. ' back :')
+		print(gradOutput)
+	end
 	return self.gradInput
 end
