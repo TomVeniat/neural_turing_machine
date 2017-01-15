@@ -88,70 +88,14 @@ end
 
 
 
+torch.manualSeed(123)
 
--- m = Memory(5,2)
--- print(m.mem)
+local sep = '-'
 
--- r = torch.Tensor({0.9,0.1,0,0,0})
--- print(r:resize(1,5))
--- print(m:read(r))
-
-
--- r = torch.Tensor({1,2}):resize(1,2)
--- print(m:getContentWeightings(r,120))
-
-
--- xs,ys = createCopyDataSet(10,4)
-
--- print(xs)
--- print(ys)
--- print(m.mem)
-
--- print()
-
-
--- s = {}
--- s[0] = 0.05
--- s[-1] = 0.9
--- s[-2] = 0.05
-
--- r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
-
--- shifted = m:shiftWeigthing(r, s)
--- print(shifted)
-
-
--- r = torch.Tensor({0,0.1,0.8,0.1,0}):resize(1,5)
-
--- sharpened = m:sharpenWeigths(r,2)
-
--- print(sharpened)
-
--- e = torch.Tensor({0,1}):resize(1,2)
-
--- print(m.mem)
--- m:erase(r:t(),e)
--- print(m.mem)
--- m:add(r:t(),e)
--- print(m.mem)
-
--- a = torch.Tensor({0,1,1,0,1})
--- b = torch.Tensor({0,0,1,0,1})
--- c = torch.Tensor({0,1,1,0,0})
--- d = torch.Tensor({-700,12,123,-14,6})
--- e = torch.Tensor({-700,-45,123,-14,6})
-
-
--- 
-
-
-sep = '-'
-print(sep:rep(30))
-
-params = {
+local params = {
 	input_size = 5,
 	output_size = 5,
-	mem_locations = 3,
+	mem_locations = 4,
 	mem_location_size = 10,
 	hidden_state_size = 100,
 	allowed_shifts = {-1,0,1}
@@ -164,8 +108,13 @@ nt = nn.NTM(params)
 
 -- xs, ys = createCopyDataSet(50,3)
 
-local t = 1000000
-local seq_len = 2	
+local t = 500000
+local seq_len = 2
+local print_period = 10
+local save_period = 10000
+local start_time = os.date('%d.%m.%Y_%X')
+local save_dir = 'params/' .. start_time
+os.execute("mkdir -p " .. save_dir)
 
 local criterion = nn.BCECriterion()
 
@@ -183,6 +132,7 @@ local begin_flag = createSample({1,5},true, false)
 local end_flag = createSample({1,5},false, true)
 
 for i=1,t do
+	local stop_flag = false
 	local feval = function(x)
 		local inputs = {}
 
@@ -196,8 +146,9 @@ for i=1,t do
 		
 		local zeros = torch.zeros(1,5)
 		out = {}
-		out[1] = nt:forward(zeros)
-		out[2] = nt:forward(zeros)
+		for j=1,seq_len do
+			out[j] = nt:forward(zeros)
+		end
 
 		nt:zeroGradParameters()
 
@@ -218,8 +169,9 @@ for i=1,t do
  		
 		grads:clamp(-10,10)
 
-		if i % 10 == 0 then
-			print ('\n' .. i)
+		if i % print_period == 0 then
+			local string_sep = '\n%s\nIteration n°%d:\n'
+			io.write(string_sep:format(sep:rep(30),i))
 
 			for j=1,seq_len do
 				print(inputs[j])
@@ -227,41 +179,22 @@ for i=1,t do
 
 			for j=1,seq_len do
 				print(out[j])
-				local vals_w, inds_w = nt.outputs[j][3]:sort()
-				local vals_r, inds_r = nt.outputs[j][5]:sort()
-				local str = '%d\t%.3f\t\t%d\t%.3f'
+				local vals_w, inds_w = nt.outputs[1+j][3]:sort()
+				local vals_r, inds_r = nt.outputs[seq_len + 2 + j][5]:sort()
+				local str = '%d\t%.3f\t\t%d\t%.3f\n'
 				for k=1,vals_w:size(1) do
-					print(str:format(inds_r[k], vals_r[k], inds_w[k], vals_w[k]))
+					io.write(str:format(inds_r[k], vals_r[k], inds_w[k], vals_w[k]))
 				end
 			end
-			print(err)
-			print(grads:max())
-			print(grads:min())
+			io.write(err,'\n')
+			io.write(grads:max(),'\n')
+			io.write(grads:min(),'\n')
+		end
+		if i % save_period == 0 then
+			local var_name = '%s/%d.params'
+			torch.save(var_name:format(save_dir,i), params)
 		end
 		return err, grads
-		-- nt.ctrl:updateParameters(0.0001)
 	end
-	-- feval()
 	rmsprop(feval, params, rmsprop_state)
-	-- print(grad) 
-	-- outputs[i] = nt:forward(torch.Tensor{1,2,3,4,5}:resize(1,5))
 end
-
--- for i=1,#outputs do
--- 	nt.ctrl:zeroGradParameters()
--- 	print('\nInput :')
--- 	print(inputs[i])
--- 	print('Output :')
--- 	print(outputs[i])
--- 	print('Err :')
--- 	print(criterion:forward(inputs[i], outputs[i]))
--- 	print('grad outs :')
--- 	print(criterion:backward(inputs[i], outputs[i]))
--- 	print('grad ins:')
--- 	print(nt:backward(inputs[i], criterion:backward(inputs[i], outputs[i])))
--- 	-- nt.ctel
--- end
--- local sample = createSample({1,7},false, false)
--- print(nt:forward(sample))
-
--- -- print(nt.outputs)
