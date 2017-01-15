@@ -235,3 +235,18 @@ function NTM:backward(input, gradOutput)
 	return self.gradInputs[1]
 end
 
+function NTM:parameters()
+	ctrl_p, ctrl_g = self.ctrl:parameters()
+	init_p, init_g = self.initilizer:parameters()
+
+	tablex.insertvalues(ctrl_p, init_p)
+	tablex.insertvalues(ctrl_g, init_g)
+
+	return ctrl_p, ctrl_g
+end
+
+function NTM:zeroGradParameters()
+	self.ctrl:zeroGradParameters()
+	self.initilizer:zeroGradParameters()
+end
+
