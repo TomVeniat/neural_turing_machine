@@ -1,6 +1,5 @@
 require 'nn'
 require 'nngraph'
-require 'Memory'
 require 'modules/Logging'
 require 'modules/MulScalar'
 require 'modules/ConcatTensor'
