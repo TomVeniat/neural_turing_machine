@@ -122,7 +122,7 @@ function NTM:create_head(h_state, prev_w, mem)
 
 	local w_s = nn.Logging('w_s',false)(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
 
-	local w = nn.Logging('w',false)(nn.PowScalar()({gamma_t, w_s}))
+	local w = nn.Logging('w',false)(nn.Normalize(1)(nn.PowScalar()({gamma_t, w_s})))
 
 	
 
