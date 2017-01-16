@@ -2,6 +2,7 @@ require 'nn'
 require 'nngraph'
 require 'ntm'
 require 'optim'
+require 'gnuplot'
 
 function rmsprop(opfunc, x, config, state)
   if config == nil and state == nil then
@@ -88,11 +89,10 @@ end
 
 
 
-torch.manualSeed(123)
 
 local sep = '-'
 
-local params = {
+local ntm_params = {
 	input_size = 5,
 	output_size = 5,
 	mem_locations = 4,
@@ -101,26 +101,16 @@ local params = {
 	allowed_shifts = {-1,0,1}
 }
 
-nt = nn.NTM(params)
 
-
--- nngraph.annotateNodes()
-
--- xs, ys = createCopyDataSet(50,3)
-
-local t = 500000
+local t = 50000
 local seq_len = 2
-local print_period = 10
-local save_period = 10000
-local start_time = os.date('%d.%m.%Y_%X')
-local save_dir = 'params/' .. start_time
-os.execute("mkdir -p " .. save_dir)
+local print_period = 100
+local save_period = 1000
+local error_window_size = 500
+
 
 local criterion = nn.BCECriterion()
 
-params, grads = nt:getParameters() 
-print (params:mean())
-print (grads:mean())
 
 local rmsprop_state = {
   learningRate = 1e-4,
@@ -131,70 +121,110 @@ local rmsprop_state = {
 local begin_flag = createSample({1,5},true, false)
 local end_flag = createSample({1,5},false, true)
 
-for i=1,t do
-	local stop_flag = false
-	local feval = function(x)
-		local inputs = {}
+function launch_copy(seed)
+	torch.manualSeed(seed)
+	nt = nn.NTM(ntm_params)
 
-		nt:forward(begin_flag)
-		for j=1,seq_len do
-			inputs[j] = createSample({1,5},false, false)
-			nt:forward(inputs[j])
-		end
+	local start_time = os.date('%d.%m.%Y_%X')
+	local save_dir = 'params/' .. start_time .. '_seed=' .. seed
+	os.execute("mkdir -p " .. save_dir)
 
-		nt:forward(end_flag)
-		
-		local zeros = torch.zeros(1,5)
-		out = {}
-		for j=1,seq_len do
-			out[j] = nt:forward(zeros)
-		end
+	local params, grads = nt:getParameters() 
+	print (params:mean())
+	print (grads:mean())
 
-		nt:zeroGradParameters()
+	local running_errors = {}
 
-		err = 0
-		for j=seq_len,1,-1 do
-			err = err + criterion:forward(out[j], inputs[j])
-			grad = criterion:backward(out[j], inputs[j])
-			nt:backward(zeros,grad)
-		end
+	local errors = {}
 
-		nt:backward(end_flag,zeros)
+	for i=1,t do
+		local stop_flag = false
+		local feval = function(x)
+			local inputs = {}
 
-		for j=seq_len,1,-1 do
-			nt:backward(inputs[j],zeros)
-		end
-
-		nt:backward(begin_flag,zeros)
- 		
-		grads:clamp(-10,10)
-
-		if i % print_period == 0 then
-			local string_sep = '\n%s\nIteration n°%d:\n'
-			io.write(string_sep:format(sep:rep(30),i))
-
+			nt:forward(begin_flag)
 			for j=1,seq_len do
-				print(inputs[j])
+				inputs[j] = createSample({1,5},false, false)
+				nt:forward(inputs[j])
 			end
 
+			nt:forward(end_flag)
+			
+			local zeros = torch.zeros(1,5)
+			out = {}
 			for j=1,seq_len do
-				print(out[j])
-				local vals_w, inds_w = nt.outputs[1+j][3]:sort()
-				local vals_r, inds_r = nt.outputs[seq_len + 2 + j][5]:sort()
-				local str = '%d\t%.3f\t\t%d\t%.3f\n'
-				for k=1,vals_w:size(1) do
-					io.write(str:format(inds_r[k], vals_r[k], inds_w[k], vals_w[k]))
+				out[j] = nt:forward(zeros)
+			end
+
+			nt:zeroGradParameters()
+
+			local err = 0
+			for j=seq_len,1,-1 do
+				err = err + criterion:forward(out[j], inputs[j])
+				grad = criterion:backward(out[j], inputs[j])
+				nt:backward(zeros,grad)
+			end
+
+			nt:backward(end_flag,zeros)
+
+			for j=seq_len,1,-1 do
+				nt:backward(inputs[j],zeros)
+			end
+
+			nt:backward(begin_flag,zeros)
+	 		
+			grads:clamp(-10,10)
+
+			if i%error_window_size ==0 then
+				table.insert(errors, torch.Tensor(running_errors):mean())
+				figure_name = '%s/figure.png'
+				gnuplot.pngfigure(figure_name:format(save_dir))
+				gnuplot.plot(torch.Tensor(errors))
+				gnuplot.plotflush()
+			end
+
+			running_errors[i%error_window_size] = err
+
+
+			if i % print_period == 0 then
+				local string_sep = '\n%s\nIteration n°%d:\n'
+				io.write(string_sep:format(sep:rep(30),i))
+
+				for j=1,seq_len do
+					print(inputs[j])
 				end
+
+				for j=1,seq_len do
+					print(out[j])
+					local vals_w, inds_w = nt.outputs[1+j][3]:sort(true)
+					local vals_r, inds_r = nt.outputs[seq_len + 2 + j][5]:sort(true)
+					local str = '%d\t%.3f\t\t%d\t%.3f\n'
+					for k=1,vals_w:size(1) do
+						io.write(str:format(inds_r[k], vals_r[k], inds_w[k], vals_w[k]))
+					end
+				end
+
+				io.write('Error :', err,'\n')
+				io.write('Last ', error_window_size, ' :', torch.Tensor(running_errors):mean(),'\n')
+
+				io.write(grads:max(),'\n')
+				io.write(grads:min(),'\n')
 			end
-			io.write(err,'\n')
-			io.write(grads:max(),'\n')
-			io.write(grads:min(),'\n')
+			if i % save_period == 0 then
+				local var_name = '%s/%d-%.5f.params'
+				torch.save(var_name:format(save_dir,i,torch.Tensor(running_errors):mean()), params)
+			end
+			return err, grads
 		end
-		if i % save_period == 0 then
-			local var_name = '%s/%d.params'
-			torch.save(var_name:format(save_dir,i), params)
-		end
-		return err, grads
+		rmsprop(feval, params, rmsprop_state)
 	end
-	rmsprop(feval, params, rmsprop_state)
+	figure_name = '%s/figure.png'
+	gnuplot.pngfigure(figure_name:format(save_dir))
+	gnuplot.plot(torch.Tensor(errors))
+	gnuplot.plotflush()
+end
+
+for i = 2,100 do
+	io.write('\nseed : ', i,'\n')
+	launch_copy(i)
 end
