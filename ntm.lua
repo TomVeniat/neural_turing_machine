@@ -2,10 +2,13 @@ require 'nn'
 require 'nngraph'
 require 'modules/Logging'
 require 'modules/MulScalar'
-require 'modules/ConcatTensor'
 require 'modules/Shifter'
 require 'modules/PowScalar'
-require 'modules/Resizer'
+require 'modules/PowTable'
+require 'modules/CircularConvolution'
+require 'modules/SmoothCosineSimilarity'
+require 'modules/ScalarMulTable'
+require 'modules/OuterProd'
 
 require 'modules/Hijack'
 
@@ -32,6 +35,7 @@ function NTM:__init( params)
 
 	self.inputs = {}
 	self.outputs = {}
+	self.grad_inputs = {}
 
 	self.sequence_step = 0
 
@@ -64,7 +68,7 @@ function NTM:init_controller()
 
 	nngraph.annotateNodes()
 	self.ctrl = nn.gModule(inputs, outputs)
-	self.ctrl.name = 'gra'
+	self.ctrl.name = 'CTRLOL'
 
 	graph.dot(self.ctrl.fg, 'Forward Graph', 'Forward Graph')
 
@@ -74,7 +78,7 @@ function NTM:create_read_head(h_state, prev_w, mem)
 
 	local w = self:create_head(h_state, prev_w, mem)
 
-	local r = nn.Logging('read',false)(nn.MixtureTable(1)({w,mem}))
+	local r = nn.MixtureTable(1)({w,mem})
 
 	return mem, r, w
 end
@@ -84,75 +88,121 @@ function NTM:create_write_head(h_state, prev_w, mem)
 	local w = self:create_head(h_state, prev_w, mem)
 
 	local e = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
-	local erasure = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.Resizer({self.mem_locations,1})(w),e}))) 
+	local erasure = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.View(self.mem_locations,1)(w),e}))) 
 
 	local a = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
-	local addition = nn.MM()({nn.Resizer({self.mem_locations,1})(w),a})
+	local addition = nn.MM()({nn.View(self.mem_locations,1)(w),a})
 
 	local new_mem = nn.CAddTable()({nn.CMulTable()({mem, erasure}),addition})
 	nngraph.annotateNodes()
 	return new_mem, w
 end
 
+-- function NTM:create_write_head(h_state, prev_w, mem)
+
+
+-- 	-- local in_hidden = nn.View(self.hidden_state_size)(h_state)
+
+-- 	local w = self:create_head(h_state, prev_w, mem)
+
+-- 	local e = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+--  	local M_erase = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.View(self.mem_locations,1)(w), e})))
+
+-- 	local a = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+--     local M_write = nn.MM()({nn.View(self.mem_locations,1)(w), a})
+
+--     local Mtilde = nn.CMulTable(){mem, M_erase}
+
+-- 	-- write to memory
+-- 	local M = nn.CAddTable(){Mtilde, M_write}
+
+-- 	-- local erasure = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.View(self.mem_locations,1)(w),e}))) 
+
+-- 	-- local addition = nn.MM()({nn.View(self.mem_locations,1)(w),a})
+
+-- 	-- local new_mem = nn.CAddTable()({nn.CMulTable()({mem, erasure}),addition})
+-- 	nngraph.annotateNodes()
+-- 	return M, w
+-- end
+
 function NTM:create_head(h_state, prev_w, mem)
-	local k_t = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
+	local in_hidden = nn.View(self.hidden_state_size)(h_state)
 
-	local beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
+	-- key vector
+  local k     = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(in_hidden))
+  -- circular convolution kernel
+  local s     = nn.SoftMax()(nn.Linear(self.hidden_state_size, #self.allowed_shifts)(in_hidden))
+  -- weight sharpening parameter
+  local beta  = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(in_hidden))
+  -- gating parameter
+  local g     = nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(in_hidden))
+  -- exponential focusing parameter
+  local gamma = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(in_hidden)))
+  
+  local sim = nn.SmoothCosineSimilarity(){mem, k}
+  local wc = nn.SoftMax()(nn.ScalarMulTable(){sim, beta})
+  local wg = nn.CAddTable(){
+    nn.ScalarMulTable(){wc, g},
+    nn.ScalarMulTable(){prev_w, nn.AddConstant(1)(nn.MulConstant(-1)(g))}
+  }
 
-	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
-
-	local s_t = nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))
-
-	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
-
-
-	local in_mem = nn.Identity()(mem)
-	local in_key = nn.Identity()(k_t)
-
-	local dist = nn.CosineDistance()({in_mem,nn.ConcatTensor(self.mem_locations)(in_key)})
-
-	local w_c = nn.Logging('w_c',false)(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
-
-	-- local gt_c = nn.
-	local w_g1 = nn.MulScalar()({g_t, w_c})
-	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev',false)(prev_w)})
-
-	local w_g = nn.Logging('w_g',false)(nn.CAddTable()({w_g1,w_g2}))
+  local wtilde = nn.CircularConvolution(){wg, s}
+  local wpow = nn.PowTable(){wtilde, gamma}
+  local w = nn.Normalize(1)(wpow)
+	return w
 
 
-	local w_s = nn.Logging('w_s',false)(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
+end
 
-	local w = nn.Logging('w',false)(nn.Normalize(1)(nn.PowScalar()({gamma_t, w_s})))
+
+-- function NTM:create_head(h_state, prev_w, mem)
+-- 	local k_t = (nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state)))
+
+-- 	local beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
+
+-- 	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+
+-- 	local s_t = nn.Logging('s_t', false)(nn.View(#self.allowed_shifts)(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))))
+
+-- 	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+
+
+-- 	local in_mem = nn.Identity()(mem)
+-- 	local in_key = nn.Identity()(nn.View(self.mem_location_size)(k_t))
+
+-- 	-- local dist = nn.CosineDistance()({in_mem,nn.Replicate(self.mem_locations)(in_key)})
+-- 	local dist = nn.SmoothCosineSimilarity()({in_mem,in_key})
+
+-- 	local w_c = nn.Logging('w_c',false)(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
+
+-- 	local w_g1 = nn.MulScalar()({g_t, w_c})
+-- 	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev',false)(prev_w)})
+
+-- 	local w_g = nn.Logging('w_g',false)(nn.CAddTable()({w_g1,w_g2}))
+
+
+-- 	local w_s = nn.Logging('w_s',false)(nn.CircularConvolution(self.allowed_shifts)({w_g, s_t}))
+
+-- 	-- local w = nn.Logging('w',false)(nn.Normalize(1)(nn.PowScalar()({gamma_t, w_s})))
+-- 	local w = nn.Logging('w',false)(nn.Normalize(1)(nn.PowTable()({w_s, nn.View(1)(gamma_t)})))
+-- 	-- local w = nn.Logging('w',false)(nn.SoftMax()( w_s))
 
 	
 
-	-- local new_w = nn.Linear(self.hidden_state_size, self.mem_locations)(h_state)
+-- 	-- local new_w = nn.Linear(self.hidden_state_size, self.mem_locations)(h_state)
 
-	-- local r = nn.MixtureTable()({new_w,new_mem})
+-- 	-- local r = nn.MixtureTable()({new_w,new_mem})
 
-	nngraph.annotateNodes()
-	return w
-	-- return new_mem, new_w, r
+-- 	nngraph.annotateNodes()
+-- 	return w
 
 
-end
-
-function NTM:getFirstInputs()
-	local input = nn.Identity()()
-	local mem_mod = nn.Resizer({self.mem_locations,self.mem_location_size})(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
-	local mem = nn.gModule({input},{mem_mod}):forward(torch.Tensor({0}))
-	local wr = nn.SoftMax():forward(torch.rand(self.mem_locations))
-	local ww = nn.SoftMax():forward(torch.rand(self.mem_locations))
-	local lin = nn.Linear(1,self.mem_location_size):forward(torch.Tensor({0}))
-	local r = nn.Tanh():forward(lin)
-	return {0, mem, ww,r, wr}
-
-end
+-- end
 
 function NTM:init_initializer()
 	local input = nn.Identity()()
 
-	local mem = nn.Resizer({self.mem_locations,self.mem_location_size})(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
+	local mem = nn.View(self.mem_locations,self.mem_location_size)(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
 	local wr = nn.SoftMax()(nn.Linear(1,self.mem_locations)(input))
 	local ww = nn.SoftMax()(nn.Linear(1,self.mem_locations)(input))
 	local r = nn.Tanh()(nn.Linear(1,self.mem_location_size)(input))
@@ -162,7 +212,7 @@ function NTM:init_initializer()
 	self.initilizer = nn.gModule({input},{nn.Identity()(input),mem,ww,r,wr})
 end
 
-function NTM:getFirstGradInputs()
+function NTM:getFirstGradOutputs()
 
 	local mem_grad = torch.zeros(self.mem_locations, self.mem_location_size)
 	local ww_grad = torch.zeros(self.mem_locations)
@@ -206,40 +256,100 @@ function NTM:forward(input)
 	return self.outputs[self.sequence_step][1]
 end
 
+function print_table(table)
+	for i=1,#table do
+		if(type(table[i]) == 'table') then
+			print('ELEM ' .. i)
+			print_table(table[i])
+		else
+			print(table[i])
+		end
+	end
+end
+
+function max_table(table)
+	local max = -1
+	for i=2,#table do
+		local cur_max = table[i]:max()
+		if max < cur_max then
+			max = cur_max
+		end
+	end
+	return max
+end
+
+function test_nan(table)
+	for i=1,#table do
+		if table[i]:max()~=table[i]:max() then
+			print(i)
+			print(table[i])
+			print_table(table)
+			return true
+		end
+	end
+	return false
+end
+
+
 function NTM:backward(input, gradOutput)
+	
+
+	-- if self.sequence_step == 0 then
+	-- 	inputs = self.initilizer:forward(torch.Tensor{0})
+	-- else
+	-- 	inputs = copy_table(self.outputs[self.sequence_step])
+	-- end
+	-- inputs[1] = input
+
+	local inputs = self.inputs[self.sequence_step]
+
+	local grad_outputs = self.grad_inputs[self.sequence_step+1]
+	if grad_outputs == nil then
+		self.grad_inputs[self.sequence_step+1] = self:getFirstGradOutputs()
+		grad_outputs = self.grad_inputs[self.sequence_step+1]
+	-- else
+	-- 	grad_outputs = copy_tensor_table(self.grad_inputs)
+	end
+
+	grad_outputs[1] = gradOutput
+
+	local grad_inputs = self.ctrl:backward(inputs, grad_outputs)
+
+	local stop = test_nan(grad_inputs)
+	
+	if stop then
+		print('Got nan in step ' .. self.sequence_step )
+		print('In :')
+		print(input)
+		print('Inputs :')
+		print_table(inputs)
+		print('grad_outputs')
+		print_table(grad_outputs)
+		-- error('Need to stop ')
+	end
+
+
+
+	if self.sequence_step == 1 then
+		grad_inputs[1] = torch.Tensor{0}
+		self.initilizer:backward(torch.Tensor{0},grad_inputs)
+	end
+
+	self.grad_inputs[self.sequence_step] = grad_inputs
 
 	self.sequence_step = self.sequence_step - 1
 
-	local inputs
-	if self.sequence_step == 0 then
-		inputs = self.initilizer:forward(torch.Tensor{0})
-	else
-		inputs = copy_table(self.outputs[self.sequence_step])
-	end
-	inputs[1] = input
-
-	inputs = self.inputs[self.sequence_step + 1]
-
-	if self.grad_inputs == nil then
-		self.grad_inputs = self:getFirstGradInputs()
-	end
-	self.grad_inputs[1] = gradOutput
-	local grad_outputs = copy_tensor_table(self.grad_inputs)
-
-	local grad_in = self.ctrl:backward(inputs, grad_outputs)
-
-	if self.sequence_step == 0 then
-		self.initilizer:backward(torch.Tensor{0},grad_in)
-	end
-
-	self.gradInputs = grad_in
-
-	return self.gradInputs[1]
+	return self.grad_inputs[self.sequence_step + 1][1], stop
 end
 
 function NTM:parameters()
 	ctrl_p, ctrl_g = self.ctrl:parameters()
 	init_p, init_g = self.initilizer:parameters()
+
+	print('Ntm net has ')
+	print(self.ctrl:getParameters():size())
+	print('Init net has ')
+	print(self.initilizer:getParameters():size())
 
 	tablex.insertvalues(ctrl_p, init_p)
 	tablex.insertvalues(ctrl_g, init_g)
@@ -249,6 +359,7 @@ end
 
 function NTM:zeroGradParameters()
 	self.ctrl:zeroGradParameters()
+	-- local params, grads = self.initilizer:getParameters() 
 	self.initilizer:zeroGradParameters()
 end
 
