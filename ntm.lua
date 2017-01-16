@@ -30,6 +30,7 @@ function NTM:__init( params)
 	self.initilizer = nil
 	self:init_initializer()
 
+	self.inputs = {}
 	self.outputs = {}
 
 	self.sequence_step = 0
@@ -48,7 +49,7 @@ function NTM:init_controller()
 	local in_h = nn.Linear(self.input_size, self.hidden_state_size)(input)
 	local r_h = nn.Linear(self.mem_location_size, self.hidden_state_size)(prev_r)
 
-	local ctrl = nn.Linear(self.hidden_state_size, self.hidden_state_size)(nn.CAddTable()({in_h,r_h}))
+	local ctrl = nn.CAddTable()({in_h,r_h})
 
 	local mem, r, wr = self:create_read_head(ctrl,prev_wr,prev_mem)
 
@@ -101,7 +102,6 @@ function NTM:create_head(h_state, prev_w, mem)
 	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
 	local s_t = nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))
-	-- local s_t = nn.Logging('Jacked shifts')(nn.Hijack(torch.Tensor{0,0,1}:view(1,3))(nn.Logging('Shifts')(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state)))))
 
 	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
 
@@ -200,6 +200,7 @@ function NTM:forward(input)
 	end
 	inputs[1] = input
 
+	self.inputs[self.sequence_step] = copy_tensor_table(inputs)
 	self.outputs[self.sequence_step] = copy_tensor_table(self.ctrl:forward(inputs))
 
 	return self.outputs[self.sequence_step][1]
@@ -216,6 +217,8 @@ function NTM:backward(input, gradOutput)
 		inputs = copy_table(self.outputs[self.sequence_step])
 	end
 	inputs[1] = input
+
+	inputs = self.inputs[self.sequence_step + 1]
 
 	if self.grad_inputs == nil then
 		self.grad_inputs = self:getFirstGradInputs()
