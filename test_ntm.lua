@@ -4,6 +4,12 @@ require 'ntm'
 require 'optim'
 require 'gnuplot'
 
+local rmsprop_state = {
+  learningRate = 1e-4,
+  momentum = 0.9,
+  decay = 0.95
+}
+
 function rmsprop(opfunc, x, config, state)
   if config == nil and state == nil then
     error('no state provided')
@@ -57,13 +63,11 @@ end
 
 
 function createSample(sampleSize, start_tag, end_tag)
-	-- local result = torch.Tensor():rand(sampleSize):gt(0.5):double()
 	local res
 	if start_tag or end_tag then
 		res = torch.zeros(unpack(sampleSize))
 	else 
 		res = torch.Tensor():rand(unpack(sampleSize)):gt(0.5):double()
-		-- return torch.zeros(unpack(sampleSize))
 	end
 
 	res[1][-2] = start_tag and 1 or 0
@@ -72,38 +76,39 @@ function createSample(sampleSize, start_tag, end_tag)
 	return res
 end
 
-function createCopyDataSet(nSample, sampleSize)
-	local x = torch.zeros(nSample+2, sampleSize+2)
-	local y = torch.zeros(nSample, sampleSize)
-	for i=1,nSample do
-		local sample = createSample(sampleSize)
-		x[{{i+1},{}}] = torch.cat(sample, torch.Tensor({0,0}))
-		y[{{i},{}}] = sample
+
+
+
+function generate_sequence(nSample, sampleSize)
+	local begin_flag = createSample({1, sampleSize},true, false)
+	local end_flag = createSample({1, sampleSize},false, true)
+	local zeros = torch.zeros(1, sampleSize)
+
+	local inputs = torch.Tensor(2 * nSample + 2, sampleSize)
+
+	inputs[1] = begin_flag
+	for j=1,nSample do
+		inputs[j + 1] = createSample({1, sampleSize},false, false)
+		inputs[nSample + 2 + j ] = zeros
 	end
-
-	x[{{1},{sampleSize + 1}}] = 1
-	x[{{nSample+2},{sampleSize + 2}}] = 1
-
-	return x, y
+	inputs[nSample + 2] = end_flag
+	return inputs
 end
-
-
-
 
 local sep = '-'
 
 local ntm_params = {
-	input_size = 5,
-	output_size = 5,
-	mem_locations = 4,
-	mem_location_size = 10,
+	input_size = 6,
+	output_size = 6,
+	mem_locations = 10,
+	mem_location_size = 20,
 	hidden_state_size = 100,
 	allowed_shifts = {-1,0,1}
 }
 
 
 local t = 50000
-local seq_len = 2
+local seq_len = 4
 local print_period = 100
 local save_period = 1000
 local error_window_size = 500
@@ -112,21 +117,15 @@ local error_window_size = 500
 local criterion = nn.BCECriterion()
 
 
-local rmsprop_state = {
-  learningRate = 1e-4,
-  momentum = 0.9,
-  decay = 0.95
-}
-
-local begin_flag = createSample({1,5},true, false)
-local end_flag = createSample({1,5},false, true)
-
 function launch_copy(seed)
-	torch.manualSeed(seed)
+	if seed ~= nil then
+		torch.manualSeed(seed)
+	end
+
 	nt = nn.NTM(ntm_params)
 
 	local start_time = os.date('%d.%m.%Y_%X')
-	local save_dir = 'params/' .. start_time .. '_seed=' .. seed
+	local save_dir = 'params/' .. start_time .. '_len=' .. seq_len .. '_lr=' .. rmsprop_state.learningRate
 	os.execute("mkdir -p " .. save_dir)
 
 	local params, grads = nt:getParameters() 
@@ -138,44 +137,42 @@ function launch_copy(seed)
 	local errors = {}
 
 	for i=1,t do
-		local stop_flag = false
 		local feval = function(x)
-			local inputs = {}
+			local inputs = generate_sequence(seq_len, ntm_params.input_size)
 
-			nt:forward(begin_flag)
-			for j=1,seq_len do
-				inputs[j] = createSample({1,5},false, false)
+			for j=1,seq_len + 2 do
 				nt:forward(inputs[j])
 			end
-
-			nt:forward(end_flag)
 			
-			local zeros = torch.zeros(1,5)
 			out = {}
 			for j=1,seq_len do
-				out[j] = nt:forward(zeros)
+				out[j] = nt:forward(inputs[seq_len + 2 + j ])
 			end
 
 			nt:zeroGradParameters()
 
+			local grads_bw = torch.Tensor(2 * seq_len + 2, ntm_params.input_size)
+			local zeros = torch.zeros(1, ntm_params.input_size)
+
+			grads_bw[{{1,seq_len + 2}}] = zeros:repeatTensor(seq_len + 2, 1)
+
 			local err = 0
-			for j=seq_len,1,-1 do
-				err = err + criterion:forward(out[j], inputs[j])
-				grad = criterion:backward(out[j], inputs[j])
-				nt:backward(zeros,grad)
+			for j=1,seq_len do
+				grads_bw[j + seq_len + 2] = criterion:backward(out[j], inputs[j + 1])
+				err = err + criterion:forward(out[j], inputs[j + 1])
 			end
 
-			nt:backward(end_flag,zeros)
-
-			for j=seq_len,1,-1 do
-				nt:backward(inputs[j],zeros)
+			for j=seq_len * 2 + 2,1, -1 do
+				nt:backward(inputs[j],grads_bw[j])
 			end
-
-			nt:backward(begin_flag,zeros)
 	 		
-			grads:clamp(-10,10)
+			local n_sup = grads:gt(10):sum()
+			local n_inf = grads:lt(-10):sum()
 
-			if i%error_window_size ==0 then
+			grads:clamp(-1,1)
+
+
+			if i%error_window_size == 0 then
 				table.insert(errors, torch.Tensor(running_errors):mean())
 				figure_name = '%s/figure.png'
 				gnuplot.pngfigure(figure_name:format(save_dir))
@@ -186,13 +183,12 @@ function launch_copy(seed)
 			running_errors[i%error_window_size] = err
 
 
-			if i % print_period == 0 then
+			if i % print_period == 1 then
 				local string_sep = '\n%s\nIteration n°%d:\n'
+				
 				io.write(string_sep:format(sep:rep(30),i))
 
-				for j=1,seq_len do
-					print(inputs[j])
-				end
+				print(inputs)
 
 				for j=1,seq_len do
 					print(out[j])
@@ -204,11 +200,17 @@ function launch_copy(seed)
 					end
 				end
 
+				print(grads_bw)
+
 				io.write('Error :', err,'\n')
 				io.write('Last ', error_window_size, ' :', torch.Tensor(running_errors):mean(),'\n')
 
+				io.write(n_sup,'\n')
+				io.write(n_inf,'\n')	
+
 				io.write(grads:max(),'\n')
 				io.write(grads:min(),'\n')
+				print(grads:eq(0):sum())
 			end
 			if i % save_period == 0 then
 				local var_name = '%s/%d-%.5f.params'
@@ -224,7 +226,4 @@ function launch_copy(seed)
 	gnuplot.plotflush()
 end
 
-for i = 2,100 do
-	io.write('\nseed : ', i,'\n')
-	launch_copy(i)
-end
+launch_copy()
