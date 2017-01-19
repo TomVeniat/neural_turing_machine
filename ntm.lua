@@ -1,275 +1,209 @@
 require 'nn'
 require 'nngraph'
-require 'modules/Logging'
 require 'modules/MulScalar'
 require 'modules/Shifter'
 require 'modules/PowScalar'
-require 'modules/SmoothCosineSimilarity'
-
-require 'modules/Hijack'
-
 local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
-function clone_many_times(net, T)
-    local clones = {}
-
-    local params, gradParams
-    if net.parameters then
-        params, gradParams = net:parameters()
-        if params == nil then
-            params = {}
-        end
-    end
-
-    local paramsNoGrad
-    if net.parametersNoGrad then
-        paramsNoGrad = net:parametersNoGrad()
-    end
-
-    local mem = torch.MemoryFile("w"):binary()
-    mem:writeObject(net)
-
-    for t = 1, T do
-        -- We need to use a new reader for each clone.
-        -- We don't want to use the pointers to already read objects.
-        local reader = torch.MemoryFile(mem:storage(), "r"):binary()
-        local clone = reader:readObject()
-        reader:close()
-
-        if net.parameters then
-            local cloneParams, cloneGradParams = clone:parameters()
-            local cloneParamsNoGrad
-            for i = 1, #params do
-                cloneParams[i]:set(params[i])
-                cloneGradParams[i]:set(gradParams[i])
-            end
-            if paramsNoGrad then
-                cloneParamsNoGrad = clone:parametersNoGrad()
-                for i =1,#paramsNoGrad do
-                    cloneParamsNoGrad[i]:set(paramsNoGrad[i])
-                end
-            end
-        end
-
-        clones[t] = clone
-        collectgarbage()
-    end
-
-    mem:close()
-    return clones
-end
 
 function NTM:__init( params)
-	Parent.__init(self)
+    Parent.__init(self)
 
-	print ('INIT ntm')
-	nngraph.setDebug(true)
-	self.input_size = params.input_size or 3
-	self.output_size = params.output_size or 3
-	self.mem_locations = params.mem_locations or 50
-	self.mem_location_size = params.mem_location_size or 3
-	self.hidden_state_size = params.hidden_state_size or 80
-	self.allowed_shifts = params.allowed_shifts or {-1,0,1}
+    self.input_size = params.input_size or 10
+    self.output_size = params.output_size or 10
+    self.mem_locations = params.mem_locations or 120
+    self.mem_location_size = params.mem_location_size or 20
+    self.hidden_state_size = params.hidden_state_size or 100
+    self.allowed_shifts = params.allowed_shifts or {-1,0,1}
 
-	self.ctrl={}
-	self.controller = nil
-	self:init_controller()
-	self.initilizer = nil
-	self:init_initializer()
+    self.ctrl = {self:new_unit()}
+    
+    self.initilizer = self:get_initializer()
 
-	self.inputs = {}
-	self.outputs = {}
-	self.grad_inputs = {}
+    self.inputs = {}
+    self.outputs = {}
 
-	self.sequence_step = 0
+    self.sequence_step = 0
 
 end
 
-function NTM:init_controller()
-	local input = nn.Identity()()
+function NTM:new_unit()
+    local input = nn.Identity()()
 
-	local prev_mem = nn.Identity()()
-	local prev_wr = nn.Identity()()
-	local prev_ww = nn.Identity()()
+    local prev_mem = nn.Identity()()
+    local prev_read_w = nn.Identity()()
+    local prev_read = nn.Identity()()
+    local prev_write_w = nn.Identity()()
 
-	local prev_r = nn.Identity()()
+    local in_hidden = nn.Linear(self.input_size, self.hidden_state_size)(input)
+    local r_hidden = nn.Linear(self.mem_location_size, self.hidden_state_size)(prev_read)
+    local controller = nn.CAddTable()({in_hidden, r_hidden})
 
-	local in_h = nn.Linear(self.input_size, self.hidden_state_size)(input)
-	local r_h = nn.Linear(self.mem_location_size, self.hidden_state_size)(prev_r)
+    local read, read_w = self:create_read_head(controller, prev_read_w, prev_mem)
+    local memory, write_w = self:create_write_head(controller, prev_write_w, prev_mem)
 
-	local ctrl = nn.CAddTable()({in_h,r_h})
+    local output = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.output_size)(controller))
 
-	local mem_red,r, wr = self:create_read_head(ctrl,prev_wr,prev_mem)
+    local inputs = {input, prev_mem, prev_write_w, prev_read, prev_read_w}
+    local outputs = {output, memory, write_w, read, read_w}
 
-	local new_mem, ww = self:create_write_head(ctrl,prev_ww,mem_red)
+    local new_module = nn.gModule(inputs, outputs)
 
-	local output = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.output_size)(ctrl))
+    return new_module
+end
 
-	local inputs = {input, prev_mem, prev_ww, prev_r, prev_wr}
+function NTM:copy_main_unit()
+    local new_unit = self:new_unit()
 
-	local outputs = {output, new_mem, ww, r, wr}
+    local params, grads = self.ctrl[1]:parameters()
+    local new_params, new_grads = new_unit:parameters()
 
+    for i = 1, #params do
+        new_params[i]:set(params[i])
+        new_grads[i]:set(grads[i])
+    end
 
-	nngraph.annotateNodes()
-	self.ctrl[1] = nn.gModule(inputs, outputs)
-	self.ctrl.name = 'CTRLOL'
+    return new_unit
+end
 
-	graph.dot(self.ctrl[1].fg, 'Forward Graph', 'Forward Graph')
+function NTM:get_initializer()
+    local input = nn.Identity()()
+
+    local mem = nn.View(self.mem_locations,self.mem_location_size)(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
+    local wr_lin = nn.Linear(1,self.mem_locations)
+    wr_lin.bias:copy(torch.range(self.mem_locations, 1, -1))
+    local wr = nn.SoftMax()(wr_lin(input))
+
+    local ww_lin = nn.Linear(1,self.mem_locations)
+    ww_lin.bias:copy(torch.range(self.mem_locations, 1, -1))
+    local ww = nn.SoftMax()(ww_lin(input))
+    local r = nn.Tanh()(nn.Linear(1,self.mem_location_size)(input))
+
+    return nn.gModule({input},{nn.Identity()(input),mem,ww,r,wr})
+end
+
+function NTM:get_first_grad_outputs()
+    local mem_grad = torch.zeros(self.mem_locations, self.mem_location_size)
+    local ww_grad = torch.zeros(self.mem_locations)
+    local r_grad = torch.zeros(self.mem_location_size)
+    local wr_grad = torch.zeros(self.mem_locations)
+    return {0, mem_grad, ww_grad, r_grad, wr_grad}
 
 end
 
-function NTM:create_read_head(h_state, prev_w, memoire)
-
-	local w = self:create_head(h_state, prev_w, memoire)
-
-	local r = nn.MixtureTable()({w,memoire})
-	nngraph.annotateNodes()
-	return memoire, r, w
+function NTM:create_read_head(ctrl_state, prev_w, mem)
+    local w = self:create_head(ctrl_state, prev_w, mem)
+    local read = nn.MixtureTable()({w, mem})
+    return read, w
 end
 
-function NTM:create_write_head(h_state, prev_w, memoise)
+function NTM:create_write_head(ctrl_state, prev_w, mem)
+    local w = self:create_head(ctrl_state, prev_w, mem)
 
-	local w = self:create_head(h_state, prev_w, memoise)
+    local e = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.mem_location_size)(ctrl_state))
+    local erasure = nn.AddConstant(1)(
+                        nn.MulConstant(-1)(
+                            nn.MM()({
+                                nn.View(self.mem_locations,1)(w),
+                                nn.View(1, self.mem_location_size)(e)})))
 
-	local e = nn.Sigmoid()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
-	local erasure = nn.AddConstant(1)(nn.MulConstant(-1)(nn.MM()({nn.View(self.mem_locations,1)(w),nn.View(1, self.mem_location_size)(e)}))) 
+    local a = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(ctrl_state))
+    local addition = nn.MM()({
+      nn.View(self.mem_locations,1)(w),
+      nn.View(1, self.mem_location_size)(a)})
 
-	local a = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state))
-	local addition = nn.MM()({nn.View(self.mem_locations,1)(w),nn.View(1, self.mem_location_size)(a)})
+    local erased_mem = nn.CMulTable()({mem, erasure})
+    local new_mem = nn.CAddTable()({erased_mem,addition})
 
-	local new_mem = nn.CAddTable()({nn.CMulTable()({memoise, erasure}),addition})
-	
-	return new_mem, w
+    return new_mem, w
 end
 
-function NTM:create_head(h_state, prev_w, mem)
-	local k_t = (nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(h_state)))
+function NTM:create_head(ctrl_state, prev_w, mem)
+    local key = nn.Tanh()(nn.Linear(self.hidden_state_size, self.mem_location_size)(ctrl_state))
+    local beta = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(ctrl_state))
+    local g = nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(ctrl_state))
+    local shift_weigths = nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(ctrl_state))
+    local gamma = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(ctrl_state)))
 
-	local beta_t = nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state))
+    local key_matching = nn.CosineDistance()({mem, nn.Replicate(self.mem_locations)(key)})
 
-	local g_t = nn.Logging('gate',false)(nn.Sigmoid()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+    local w_c = nn.SoftMax()(nn.MulScalar()({beta, key_matching}))
 
-	local s_t = nn.Logging('s_t', false)(nn.View(#self.allowed_shifts)(nn.SoftMax()(nn.Linear(self.hidden_state_size,#self.allowed_shifts)(h_state))))
+    local w_g1 = nn.MulScalar()({g, w_c})
+    local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g)), prev_w})
+    local w_g = nn.CAddTable()({w_g1,w_g2})
 
-	local gamma_t = nn.AddConstant(1)(nn.SoftPlus()(nn.Linear(self.hidden_state_size, 1)(h_state)))
+    local w_s = nn.Shifter(self.allowed_shifts)({w_g, shift_weigths})
 
+    local w = nn.Normalize(1)(nn.PowScalar()({gamma, w_s}))
 
-	local in_mem = nn.Identity()(mem)
-	local in_key = nn.Identity()(nn.View(self.mem_location_size)(k_t))
-
-	-- local dist = nn.CosineDistance()({in_mem,nn.Replicate(self.mem_locations)(in_key)})
-	local dist = nn.SmoothCosineSimilarity()({in_mem,in_key})
-
-	local w_c = nn.Logging('w_c',false)(nn.SoftMax()(nn.MulScalar()({beta_t,dist})))
-
-	local w_g1 = nn.MulScalar()({g_t, w_c})
-	local w_g2 = nn.MulScalar()({nn.AddConstant(1)(nn.MulConstant(-1)(g_t)), nn.Logging('prev',false)(prev_w)})
-
-	local w_g = nn.Logging('w_g',false)(nn.CAddTable()({w_g1,w_g2}))
-
-
-	local w_s = nn.Logging('w_s',false)(nn.Shifter(self.allowed_shifts)({w_g, s_t}))
-
-	local w = nn.Logging('w',false)(nn.Normalize(1)(nn.PowScalar()({gamma_t, w_s})))
-
-
-	nngraph.annotateNodes()
-	return w
+    return w
 end
 
-function NTM:init_initializer()
-	local input = nn.Identity()()
-
-	local mem = nn.View(self.mem_locations,self.mem_location_size)(nn.Linear(1,self.mem_locations * self.mem_location_size)(input))
-	local wr_lin = nn.Linear(1,self.mem_locations)
-	wr_lin.bias:copy(torch.range(self.mem_locations, 1, -1))
-	local wr = nn.SoftMax()(wr_lin(input))
-
-	local ww_lin = nn.Linear(1,self.mem_locations)
-	ww_lin.bias:copy(torch.range(self.mem_locations, 1, -1))
-	local ww = nn.SoftMax()(ww_lin(input))
-	local r = nn.Tanh()(nn.Linear(1,self.mem_location_size)(input))
-
-	self.initilizer = nn.gModule({input},{nn.Identity()(input),mem,ww,r,wr})
-end
-
-function NTM:getFirstGradOutputs()
-	local mem_grad = torch.zeros(self.mem_locations, self.mem_location_size)
-	local ww_grad = torch.zeros(self.mem_locations)
-	local r_grad = torch.zeros(self.mem_location_size)
-	local wr_grad = torch.zeros(self.mem_locations)
-	return {0, mem_grad, ww_grad, r_grad, wr_grad}
-
-end
 
 function NTM:forward(input)
+    self.sequence_step = self.sequence_step + 1
 
-	self.sequence_step = self.sequence_step + 1
+    local current_unit = self.ctrl[self.sequence_step]
+    if current_unit == nil then
+       current_unit = self:copy_main_unit()
+       table.insert(self.ctrl, current_unit)
+    end
 
-	local ctrol = self.ctrl[self.sequence_step]
-	if ctrol == nil then
-		ctrol = clone_many_times(self.ctrl[1],2)[2]
-		self.ctrl[self.sequence_step] = ctrol
-	end
+    local inputs
+    if self.sequence_step == 1 then
+       inputs = self.initilizer:forward(torch.Tensor{0})
+    else
+       inputs = self.outputs[self.sequence_step - 1]
+    end
+    inputs[1] = input
 
+    self.inputs[self.sequence_step] = inputs
+    self.outputs[self.sequence_step] = current_unit:forward(inputs)
 
-	local inputs
-	if self.sequence_step == 1 then
-		inputs = self.initilizer:forward(torch.Tensor{0})
-	else
-		inputs = self.outputs[self.sequence_step - 1]
-	end
-	inputs[1] = input
-
-	self.inputs[self.sequence_step] = inputs
-	self.outputs[self.sequence_step] = ctrol:forward(inputs)
-
-	return self.outputs[self.sequence_step][1]
+    return self.outputs[self.sequence_step][1]
 end
 
 function NTM:backward(input, gradOutput)
-	
-	local inputs = self.inputs[self.sequence_step]
+    
+    local inputs = self.inputs[self.sequence_step]
 
-	local grad_outputs = self.grad_inputs[self.sequence_step + 1]
+    if self.grad_inputs == nil then
+       self.grad_inputs = self:get_first_grad_outputs()
+    end
+    self.grad_inputs[1] = gradOutput
 
-	if grad_outputs == nil then
-		self.grad_inputs[self.sequence_step + 1] = self:getFirstGradOutputs()
-		grad_outputs = self.grad_inputs[self.sequence_step + 1]
-	end
+    self.grad_inputs = self.ctrl[self.sequence_step]:backward(inputs, self.grad_inputs)
 
-	grad_outputs[1] = gradOutput
+    if self.sequence_step == 1 then
+       self.grad_inputs[1] = torch.Tensor{0}
+       self.initilizer:backward(torch.Tensor{0},self.grad_inputs)
+       self.grad_inputs = nil
+    end
 
-	local grad_inputs = self.ctrl[self.sequence_step]:backward(inputs, grad_outputs)
-	
-	self.grad_inputs[self.sequence_step] = grad_inputs
-
-	if self.sequence_step == 1 then
-		grad_inputs[1] = torch.Tensor{0}
-		self.initilizer:backward(torch.Tensor{0},grad_inputs)
-		self.grad_inputs = {}
-	end
-
-
-	self.sequence_step = self.sequence_step - 1
+    self.sequence_step = self.sequence_step - 1
 end
 
 function NTM:parameters()
-	ctrl_p, ctrl_g = self.ctrl[1]:parameters()
-	init_p, init_g = self.initilizer:parameters()
+    local ctrl_params, ctrl_grads = self.ctrl[1]:parameters()
+    local init_params, init_grads = self.initilizer:parameters()
 
-	tablex.insertvalues(ctrl_p, init_p)
-	tablex.insertvalues(ctrl_g, init_g)
+    local flattener = nn.FlattenTable()
 
-	return ctrl_p, ctrl_g
+    local params = flattener:forward({ctrl_params,init_params})
+    local grads = flattener:forward({ctrl_grads,init_grads})
+
+    return params, grads
 end
 
 function NTM:zeroGradParameters()
-	self.ctrl[1]:zeroGradParameters()
-	self.initilizer:zeroGradParameters()
+    self.ctrl[1]:zeroGradParameters()
+    self.initilizer:zeroGradParameters()
 end
 
 function NTM:new_sequence()
-	self.sequence_step = 0
+    self.sequence_step = 0
+    self.grad_inputs = nil
+    self.inputs = {}
+    self.outputs = {}
 end
-
