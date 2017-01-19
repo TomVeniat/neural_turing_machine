@@ -42,5 +42,6 @@ for i = min_seq_len, max_seq_len do
 
     local str_format = '%d\t\t\t%f\n'
     io.write(str_format:format(seq_len, crit:forward(out[{{seq_len + 3, 2 * seq_len + 2}}],seq[{{2, seq_len + 1 }}])))
+    io.flush()
     ntm:new_sequence()
 end

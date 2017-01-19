@@ -59,7 +59,7 @@ function launch_copy(seed)
                 ntm_model:forward(inputs[j])
             end
             
-            outputs = torch.Tensor(seq_len,ntm_params.output_size)
+            local outputs = torch.Tensor(seq_len,ntm_params.output_size)
             for j=1,seq_len do
                 outputs[j] = ntm_model:forward(inputs[seq_len + 2 + j ])
             end
@@ -114,6 +114,7 @@ function launch_copy(seed)
                 local errors_log = '\nError on last sequence : \t %.5f\nError on last %d sequences : \t %.5f\n'
                 io.write(errors_log:format(err, running_error_size, torch.Tensor(running_error):mean()))
                 io.write('\nGradients clipped : ', n_inf + n_sup, '\n')
+                io.flush()
             end
 
             if i % save_period == 1 then
