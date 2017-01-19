@@ -1,3 +1,34 @@
+
+function utils.createSample(sampleSize, start_tag, end_tag)
+    local res
+    if start_tag or end_tag then
+        res = torch.zeros(unpack(sampleSize))
+    else 
+        res = torch.rand(unpack(sampleSize)):gt(0.5):double()
+    end
+
+    res[1][-2] = start_tag and 1 or 0
+    res[1][-1] = end_tag and 1 or 0
+    return res
+end
+
+function utils.generate_sequence(nSample, sampleSize)
+    local begin_flag = utils.createSample({1, sampleSize},true, false)
+    local end_flag = utils.createSample({1, sampleSize},false, true)
+    local zeros = torch.zeros(1, sampleSize)
+
+    local inputs = torch.Tensor(2 * nSample + 2, sampleSize)
+
+    inputs[1] = begin_flag
+    for j=1,nSample do
+        inputs[j + 1] = utils.createSample({1, sampleSize},false, false)
+        inputs[nSample + 2 + j ] = zeros
+    end
+    inputs[nSample + 2] = end_flag
+    return inputs
+end
+
+
 --[[
 
 Rms prop as described in by Graves in http://arxiv.org/pdf/1308.0850v5.pdf, Sec 4.2

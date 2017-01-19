@@ -1,36 +1,7 @@
 require 'nn'
 require 'ntm'
-require 'gnuplot'
 require 'utils'
-
-function createSample(sampleSize, start_tag, end_tag)
-    local res
-    if start_tag or end_tag then
-        res = torch.zeros(unpack(sampleSize))
-    else 
-        res = torch.rand(unpack(sampleSize)):gt(0.5):double()
-    end
-
-    res[1][-2] = start_tag and 1 or 0
-    res[1][-1] = end_tag and 1 or 0
-    return res
-end
-
-function generate_sequence(nSample, sampleSize)
-    local begin_flag = createSample({1, sampleSize},true, false)
-    local end_flag = createSample({1, sampleSize},false, true)
-    local zeros = torch.zeros(1, sampleSize)
-
-    local inputs = torch.Tensor(2 * nSample + 2, sampleSize)
-
-    inputs[1] = begin_flag
-    for j=1,nSample do
-        inputs[j + 1] = createSample({1, sampleSize},false, false)
-        inputs[nSample + 2 + j ] = zeros
-    end
-    inputs[nSample + 2] = end_flag
-    return inputs
-end
+require 'gnuplot'
 
 local sep = '-'
 
@@ -82,7 +53,7 @@ function launch_copy(seed)
     for i=1,t do
         local feval = function(x)
             local seq_len = torch.random(min_seq_len, max_seq_len)
-            local inputs = generate_sequence(seq_len, ntm_params.input_size)
+            local inputs = utils.generate_sequence(seq_len, ntm_params.input_size)
 
             for j=1,seq_len + 2 do
                 ntm_model:forward(inputs[j])
