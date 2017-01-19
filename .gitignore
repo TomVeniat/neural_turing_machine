@@ -39,6 +39,11 @@ luac.out
 *.x86_64
 *.hex
 
-#nngraph generated files
+#Generated files
 *.svg
 *.dot
+params/
+
+#IDE files
+.idea/
+*.iml
