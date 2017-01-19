@@ -1,7 +1,7 @@
 require 'nn'
 require 'ntm'
-require 'utils'
 require 'gnuplot'
+local utils = require 'utils'
 
 local sep = '-'
 

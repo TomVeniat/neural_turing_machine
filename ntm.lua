@@ -3,8 +3,8 @@ require 'nngraph'
 require 'modules/MulScalar'
 require 'modules/Shifter'
 require 'modules/PowScalar'
-local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
+local NTM, Parent = torch.class('nn.NTM', 'nn.Module')
 
 function NTM:__init( params)
     Parent.__init(self)

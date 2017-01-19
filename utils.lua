@@ -1,3 +1,4 @@
+local utils = {}
 
 function utils.createSample(sampleSize, start_tag, end_tag)
     local res
@@ -93,3 +94,5 @@ function utils.save_plot(data, file_name)
     gnuplot.plot(data)
     gnuplot.plotflush()
 end
+
+return utils
