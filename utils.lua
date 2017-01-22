@@ -1,11 +1,11 @@
 local utils = {}
 
-function utils.createSample(sampleSize, start_tag, end_tag)
+function utils.createSample(sample_size, start_tag, end_tag)
     local res
     if start_tag or end_tag then
-        res = torch.zeros(unpack(sampleSize))
+        res = torch.zeros(unpack(sample_size))
     else 
-        res = torch.rand(unpack(sampleSize)):gt(0.5):double()
+        res = torch.rand(unpack(sample_size)):gt(0.5):double()
     end
 
     res[1][-2] = start_tag and 1 or 0
@@ -13,20 +13,57 @@ function utils.createSample(sampleSize, start_tag, end_tag)
     return res
 end
 
-function utils.generate_sequence(nSample, sampleSize)
-    local begin_flag = utils.createSample({1, sampleSize},true, false)
-    local end_flag = utils.createSample({1, sampleSize},false, true)
-    local zeros = torch.zeros(1, sampleSize)
+function utils.generate_sequence(n_sample, sample_size)
 
-    local inputs = torch.Tensor(2 * nSample + 2, sampleSize)
+    local inputs = torch.zeros(n_sample, sample_size)
+
+    for i=1, n_sample do
+        inputs[i] = utils.createSample({1, sample_size},false, false)
+    end
+    return inputs
+end
+
+
+function utils.generate_copy_sequence(n_sample, sample_size)
+    local begin_flag = utils.createSample({1, sample_size},true, false)
+    local end_flag = utils.createSample({1, sample_size},false, true)
+    local zeros = torch.zeros(1, sample_size)
+
+    local inputs = torch.zeros(2 * n_sample + 2, sample_size)
 
     inputs[1] = begin_flag
-    for j=1,nSample do
-        inputs[j + 1] = utils.createSample({1, sampleSize},false, false)
-        inputs[nSample + 2 + j ] = zeros
+    inputs[n_sample + 2] = end_flag
+    for j=1,n_sample do
+        inputs[j + 1] = utils.createSample({1, sample_size},false, false)
     end
-    inputs[nSample + 2] = end_flag
     return inputs
+end
+
+function utils.generate_repeat_copy_sequence(n_sample, sample_size, n_repeat)
+    local total_elems = n_sample * (n_repeat + 1) + 3
+
+    local inputs = torch.zeros(total_elems, sample_size)
+    local targets = torch.zeros(total_elems, sample_size)
+    local expect_out = {}
+
+    local seq = utils.generate_sequence(n_sample, sample_size)
+    inputs[1] = utils.createSample({1, sample_size},true, false)
+    inputs[n_sample + 2] = utils.createSample({1, sample_size},false, true)
+    inputs[{{2, n_sample + 1},{}}] = seq
+
+    local beg_ind = n_sample + 3
+    for i=1,n_repeat do
+        targets[{{beg_ind, beg_ind + n_sample -1 },{}}] = seq
+        beg_ind = beg_ind + n_sample
+    end
+    targets[-1] = utils.createSample({1, sample_size},false, true)
+
+    for i=1,total_elems do
+        expect_out[i] = i > n_sample+2
+    end
+
+
+    return inputs, targets, expect_out
 end
 
 
