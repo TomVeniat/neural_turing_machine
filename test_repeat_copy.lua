@@ -59,7 +59,7 @@ function launch_copy(seed)
             local inputs, targets, expect_out = utils.generate_repeat_copy_sequence(seq_len, ntm_params.input_size, n_repeat)
 
             local outs = torch.Tensor(inputs:size())
-            local total_length = inputs:	size(1)
+            local total_length = inputs:size(1)
 
             for j=1,total_length do
                 outs[j] = ntm_model:forward(inputs[j])
@@ -101,7 +101,7 @@ function launch_copy(seed)
                 io.write(tostring(outs[{{seq_len+3,-1}}]))
 
                 io.write('\nStep\tWrites\t\t\tReads\n')
-                for j=1,2 * seq_len + 2 do
+                for j=1,total_length do
                     local vals_w, inds_w = ntm_model.outputs[j][3]:sort(true)
                     local vals_r, inds_r = ntm_model.outputs[j][5]:sort(true)
                     local str = '%d\t%d\t%.3f\t\t%d\t%.3f\n'
