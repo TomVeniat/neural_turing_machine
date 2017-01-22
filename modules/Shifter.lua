@@ -48,9 +48,9 @@ function Shifter:updateOutput(input)
 		size = weights:size(1)
 	end
 
-	shiftMat = self:buildShiftMat(shifts,size)
+	self.shiftMat = self:buildShiftMat(shifts,size)
 
-	self.output = (weights:view(1,size) * shiftMat):view(weights:size())
+	self.output = (weights:view(1,size) * self.shiftMat):view(weights:size())
 
 	return self.output
 end
@@ -70,10 +70,8 @@ function Shifter:updateGradInput(input, gradOutput)
 		shifts = shifts:view(shifts:size(2))
 	end
 
-	local shiftMat = self:buildShiftMat(shifts,size)
-
 	self.gradInput = {}
-	self.gradInput[1] = shiftMat * gradOutput:view(size,1)
+	self.gradInput[1] = self.shiftMat * gradOutput:view(size,1)
 
 	local grad_shifts = torch.Tensor():resize(shifts:size())
 	for i=1,#self.shift_range do
@@ -82,6 +80,8 @@ function Shifter:updateGradInput(input, gradOutput)
 	end
 
 	self.gradInput[2] = grad_shifts:view(shifts:size())
+
+	self.shiftMat = nil
 
 	return self.gradInput
 end
