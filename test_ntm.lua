@@ -1,22 +1,25 @@
 require 'nn'
 require 'ntm'
 require 'gnuplot'
+
 local utils = require 'utils'
 
-local sep = '-'
-
-local t = 10000
-local min_seq_len = 1
-local max_seq_len = 20
-local print_period = 100
-local save_period = 1000
-local running_error_size = 500
-local figure_name = '%s/loss.png'
+local sim_params = {
+	n_epochs = 10e6,
+	min_seq_len = 3,
+	max_seq_len = 3,
+	print_period = 100,
+	save_period = 1000,
+	running_error_size = 500,
+	figure_name = '%s/loss.png',
+	clip_max = 10,
+	clip_min = -10
+}
 
 local ntm_params = {
-    input_size = 10,
-    output_size = 10,
-    mem_locations = 50,
+    input_size = 5,
+    output_size = 5,
+    mem_locations = 128,
     mem_location_size = 20,
     hidden_state_size = 100,
     allowed_shifts = {-1,0,1}
@@ -28,104 +31,29 @@ local rmsprop_config = {
   decay = 0.95
 }
 
-local clip_max = 10
-local clip_min = -10
 
-local criterion = nn.BCECriterion()
-
-function launch_copy(seed)
-    if seed then
-        torch.manualSeed(seed)
-    end
-
-    local ntm_model = nn.NTM(ntm_params)
-
-    local start_time = os.date('%d.%m.%Y_%X')
-    local dir_format = "params/%s_len=%d-%d_lr=%.4f"
-    local save_dir = dir_format:format(start_time, min_seq_len, max_seq_len, rmsprop_config.learningRate)
-    os.execute("mkdir -p " .. save_dir)
-
-
-    local running_error = {}
-    local errors = {}
-    local model_params, model_grads = ntm_model:getParameters() 
-    
-    for i=1,t do
-        local feval = function(x)
-            local seq_len = torch.random(min_seq_len, max_seq_len)
-            local inputs = utils.generate_sequence(seq_len, ntm_params.input_size)
-
-            for j=1,seq_len + 2 do
-                ntm_model:forward(inputs[j])
-            end
-            
-            local outputs = torch.Tensor(seq_len,ntm_params.output_size)
-            for j=1,seq_len do
-                outputs[j] = ntm_model:forward(inputs[seq_len + 2 + j ])
-            end
-
-            ntm_model:zeroGradParameters()
-
-            local grads = torch.Tensor(2 * seq_len + 2, ntm_params.input_size)
-            local zeros = torch.zeros(1, ntm_params.input_size)
-
-            grads[{{1,seq_len + 2}}] = zeros:repeatTensor(seq_len + 2, 1)
-
-            local err = 0
-            for j=1,seq_len do
-                grads[j + seq_len + 2] = criterion:backward(outputs[j], inputs[j + 1])
-                err = err + criterion:forward(outputs[j], inputs[j + 1])
-            end
-
-            for j = 2 * seq_len + 2, 1, -1 do
-                ntm_model:backward(inputs[j],grads[j])
-            end
-            
-            local n_sup = model_grads:gt(clip_max):sum()
-            local n_inf = model_grads:lt(clip_min):sum()
-
-            model_grads:clamp(clip_min, clip_max)
-
-            running_error[i % running_error_size] = err
-
-            if i % running_error_size == 1 then
-                table.insert(errors, torch.Tensor(running_error):mean())
-                utils.save_plot(torch.Tensor(errors), figure_name:format(save_dir))
-            end
-
-            if i % print_period == 1 then
-                local string_sep = '\n%s\nIteration n°%d, sequence length : %d\n'
-                io.write(string_sep:format(sep:rep(30), i, seq_len))
-
-                io.write('\nInputs :\n')
-                io.write(tostring(inputs[{{2,seq_len+1}}]))
-
-                io.write('\nOutputs :\n')
-                io.write(tostring(outputs))
-
-                io.write('\nStep\tWrites\t\t\tReads\n')
-                for j=1,2 * seq_len + 2 do
-                    local vals_w, inds_w = ntm_model.outputs[j][3]:sort(true)
-                    local vals_r, inds_r = ntm_model.outputs[j][5]:sort(true)
-                    local str = '%d\t%d\t%.3f\t\t%d\t%.3f\n'
-                    io.write(str:format(j,inds_w[1], vals_w[1], inds_r[1], vals_r[1]))
-                end
-
-                local errors_log = '\nError on last sequence : \t %.5f\nError on last %d sequences : \t %.5f\n'
-                io.write(errors_log:format(err, running_error_size, torch.Tensor(running_error):mean()))
-                io.write('\nGradients clipped : ', n_inf + n_sup, '\n')
-                io.flush()
-            end
-
-            if i % save_period == 1 then
-                local var_name = '%s/%d-%.5f.params'
-                torch.save(var_name:format(save_dir,i,torch.Tensor(running_error):mean()), model_params)
-            end
-
-            return err, model_grads
-        end
-        utils.rmsprop(feval, model_params, rmsprop_config)
-    end               
+function data_gen_copy()
+	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
+    return seq_len + 2, utils.generate_copy_sequence(seq_len, ntm_params.input_size)
 end
 
-launch_copy(12)
+local n_repeat = 5
+function data_gen_rep_copy()
+	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
+    return seq_len + 2, utils.generate_repeat_copy_sequence(seq_len, ntm_params.input_size, n_repeat)
+end
+
+
+local item_length = 3
+function data_gen_assoc_recall()
+	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
+	local key_index = torch.random(1, seq_len - 1)
+
+	in_len = (seq_len + 1) * (item_length + 1)
+	return in_len, utils.generate_associative_racall_sequence(seq_len, item_length, key_index, ntm_params.input_size)
+end
+
+sim_params.data_gen = data_gen_assoc_recall
+
+
+utils.launch_task(sim_params, ntm_params, rmsprop_config, 12)
