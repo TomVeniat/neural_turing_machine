@@ -25,8 +25,8 @@ local sim_params = {
 }
 
 local ntm_params = {
-    input_size = 7,
-    output_size = 7,
+    input_size = 9,
+    output_size = 9,
     mem_locations = 128,
     mem_location_size = 20,
     hidden_state_size = 100,

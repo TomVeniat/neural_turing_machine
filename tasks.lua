@@ -15,12 +15,12 @@ function tasks.create_sample(sample_size, is_flag, flags)
 end
 
 
-function tasks.generate_sequence(n_sample, sample_size)
+function tasks.generate_sequence(n_sample, sample_size, flags)
 
     local inputs = torch.zeros(n_sample, sample_size)
 
     for i=1, n_sample do
-        inputs[i] = tasks.create_sample({1, sample_size}, false, {0,0})
+        inputs[i] = tasks.create_sample({1, sample_size}, false, flags)
     end
     return inputs
 end
@@ -34,7 +34,7 @@ function tasks.generate_copy_sequence(n_sample, sample_size, force_zero)
     local expect_out = {}
 
 
-    local seq = tasks.generate_sequence(n_sample, sample_size)
+    local seq = tasks.generate_sequence(n_sample, sample_size, {0})
     inputs[{{1, n_sample},{}}] = seq
     inputs[n_sample + 1] = tasks.create_sample({1, sample_size}, true, {1})
 
@@ -50,7 +50,6 @@ end
 
 
 function tasks.generate_repeat_copy_sequence(n_sample, sample_size, n_repeat, force_zero)
-    local n_repeat = n_repeat or 3
     local total_elems = n_sample * (n_repeat + 1) + 3
 
     local inputs = torch.zeros(total_elems, sample_size)
