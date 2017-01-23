@@ -2,23 +2,31 @@ require 'nn'
 require 'ntm'
 require 'gnuplot'
 
-local utils = require 'utils'
+local tasks = require 'tasks'
 
 local sim_params = {
-	n_epochs = 10e6,
-	min_seq_len = 3,
-	max_seq_len = 3,
+	--Total sequence number used for training
+	n_epochs = 10e5,
+	--Training sequence length bounds
+	min_seq_len = 1,
+	max_seq_len = 20,
+	--Debug output period (-1 for no console output)
 	print_period = 100,
+	--Params saving period (-1 for no parameters backups)
 	save_period = 1000,
-	running_error_size = 500,
-	figure_name = '%s/loss.png',
+	--"Batch" size, number of sequence processed between two plot points (-1 for no plot)
+	running_error_size = 100,
+	figure_name = '%s/loss.svg',
+	--Gradient clipping bounds
 	clip_max = 10,
-	clip_min = -10
+	clip_min = -10,
+	--force ntm to output zeros when no output expected
+	force_zero = false
 }
 
 local ntm_params = {
-    input_size = 5,
-    output_size = 5,
+    input_size = 7,
+    output_size = 7,
     mem_locations = 128,
     mem_location_size = 20,
     hidden_state_size = 100,
@@ -34,13 +42,13 @@ local rmsprop_config = {
 
 function data_gen_copy()
 	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
-    return seq_len + 2, utils.generate_copy_sequence(seq_len, ntm_params.input_size)
+    return tasks.generate_copy_sequence(seq_len, ntm_params.input_size, sim_params.force_zero)
 end
 
 local n_repeat = 5
 function data_gen_rep_copy()
 	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
-    return seq_len + 2, utils.generate_repeat_copy_sequence(seq_len, ntm_params.input_size, n_repeat)
+    return tasks.generate_repeat_copy_sequence(seq_len, ntm_params.input_size, n_repeat, sim_params.force_zero)
 end
 
 
@@ -49,11 +57,11 @@ function data_gen_assoc_recall()
 	local seq_len = torch.random(sim_params.min_seq_len, sim_params.max_seq_len)
 	local key_index = torch.random(1, seq_len - 1)
 
-	in_len = (seq_len + 1) * (item_length + 1)
-	return in_len, utils.generate_associative_racall_sequence(seq_len, item_length, key_index, ntm_params.input_size)
+	return tasks.generate_associative_racall_sequence(seq_len, item_length, key_index, ntm_params.input_size, sim_params.force_zero)
 end
 
-sim_params.data_gen = data_gen_assoc_recall
+sim_params.task_name = 'copy'
+sim_params.data_gen = data_gen_copy
 
 
-utils.launch_task(sim_params, ntm_params, rmsprop_config, 12)
+tasks.launch_task(sim_params, ntm_params, rmsprop_config, 0)
