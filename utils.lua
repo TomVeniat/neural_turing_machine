@@ -1,31 +1,31 @@
 local utils = {}
 
-function utils.createSample(sample_size, start_tag, end_tag)
+function utils.create_sample(sample_size, is_flag, flags)
+
     local res
-    if start_tag or end_tag then
+    if is_flag then
         res = torch.zeros(unpack(sample_size))
-    else 
+    else
         res = torch.rand(unpack(sample_size)):gt(0.5):double()
     end
-
-    res[1][-2] = start_tag and 1 or 0
-    res[1][-1] = end_tag and 1 or 0
+    res[{{1},{-#flags, -1}}] = torch.Tensor(flags)
     return res
 end
+
 
 function utils.generate_sequence(n_sample, sample_size)
 
     local inputs = torch.zeros(n_sample, sample_size)
 
     for i=1, n_sample do
-        inputs[i] = utils.createSample({1, sample_size},false, false)
+        inputs[i] = utils.create_sample({1, sample_size}, false, {0,0})
     end
     return inputs
 end
 
 
 function utils.generate_copy_sequence(n_sample, sample_size)
-    local total_elems =  2 * n_sample + 2
+    local total_elems =  2 * n_sample + 1
 
     local inputs = torch.zeros(total_elems, sample_size)
     local targets = torch.zeros(total_elems, sample_size)
@@ -33,11 +33,10 @@ function utils.generate_copy_sequence(n_sample, sample_size)
 
 
     local seq = utils.generate_sequence(n_sample, sample_size)
-    inputs[1] = utils.createSample({1, sample_size},true, false)
-    inputs[n_sample + 2] = utils.createSample({1, sample_size},false, true)
-    inputs[{{2, n_sample + 1},{}}] = seq
+    inputs[{{1, n_sample},{}}] = seq
+    inputs[n_sample + 1] = utils.create_sample({1, sample_size}, true, {1})
 
-    targets[{{n_sample + 3, total_elems},{}}] = seq
+    targets[{{n_sample + 2, -1},{}}] = seq
 
     for i=1,total_elems do
         expect_out[i] = i > n_sample + 2
@@ -56,8 +55,8 @@ function utils.generate_repeat_copy_sequence(n_sample, sample_size, n_repeat)
     local expect_out = {}
 
     local seq = utils.generate_sequence(n_sample, sample_size)
-    inputs[1] = utils.createSample({1, sample_size},true, false)
-    inputs[n_sample + 2] = utils.createSample({1, sample_size},false, true)
+    inputs[1] = utils.create_sample({1, sample_size}, true, {1,0})
+    inputs[n_sample + 2] = utils.create_sample({1, sample_size}, true, {1,0})
     inputs[{{2, n_sample + 1},{}}] = seq
 
     local beg_ind = n_sample + 3
@@ -65,7 +64,7 @@ function utils.generate_repeat_copy_sequence(n_sample, sample_size, n_repeat)
         targets[{{beg_ind, beg_ind + n_sample -1 },{}}] = seq
         beg_ind = beg_ind + n_sample
     end
-    targets[-1] = utils.createSample({1, sample_size},false, true)
+    targets[-1] = utils.create_sample({1, sample_size}, true, {0,1})
 
     for i=1,total_elems do
         expect_out[i] = i > n_sample + 2
@@ -86,14 +85,14 @@ function utils.generate_associative_racall_sequence(sequence_size, item_length, 
     local seq 
     local beg_ind = 2
     for i=1,sequence_size  do
-        inputs[{{beg_ind - 1},{}}] = utils.createSample({1, sample_size},true, false)
+        inputs[{{beg_ind - 1},{}}] = utils.create_sample({1, sample_size}, true, {1,0})
 
         seq = utils.generate_sequence(item_length, sample_size)
         inputs[{{beg_ind, beg_ind + item_length - 1},{}}] = seq
         if i == key_item then
             inputs[{{key_ind, key_ind + item_length - 1},{}}] = seq
-            inputs[{{key_ind-1},{}}] = utils.createSample({1, sample_size}, false, true)
-            inputs[{{key_ind + item_length },{}}] = utils.createSample({1, sample_size}, false, true)
+            inputs[{{key_ind-1},{}}] = utils.create_sample({1, sample_size}, true, {0,1})
+            inputs[{{key_ind + item_length },{}}] = utils.create_sample({1, sample_size}, true, {0,1})
         elseif i == key_item + 1 then
             targets[{{-item_length,-1}}] = seq
         end
@@ -206,16 +205,21 @@ function utils.launch_task(task_params, ntm_params, optim_params, seed)
             end
             ntm_model:zeroGradParameters()
             local err = 0
+            local n_out = 0
             for j=total_length,1,-1 do
                 local grad
-                if expect_out[j] then
+                -- if expect_out[j] then
                     err = err + criterion:forward(outs[j], targets[j])
                     grad = criterion:backward(outs[j], targets[j])
-                else
-                    grad = torch.zeros(1, ntm_params.output_size)
-                end
+                    n_out = n_out + 1 
+                -- else
+                    -- grad = torch.zeros(1, ntm_params.output_size)
+                -- end
+
                 ntm_model:backward(inputs[j],grad)
             end
+            err = err / n_out
+
             local n_sup = model_grads:gt(task_params.clip_max):sum()
             local n_inf = model_grads:lt(task_params.clip_min):sum()
 
@@ -233,10 +237,10 @@ function utils.launch_task(task_params, ntm_params, optim_params, seed)
                 io.write(string_sep:format(sep:rep(30), i, seq_len))
 
                 io.write('\nInputs :\n')
-                io.write(tostring(inputs[{{1,seq_len}}]))
+                io.write(tostring(inputs))
 
                 io.write('\nOutputs :\n')
-                io.write(tostring(outs[{{seq_len + 1,-1}}]))
+                io.write(tostring(outs))
 
                 io.write('\nStep\tWrites\t\t\tReads\n')
                 for j=1,total_length do
