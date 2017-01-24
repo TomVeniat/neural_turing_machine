@@ -50,26 +50,25 @@ end
 
 
 function tasks.generate_repeat_copy_sequence(n_sample, sample_size, n_repeat, force_zero)
-    local total_elems = n_sample * (n_repeat + 1) + 3
+    local total_elems = n_sample * (n_repeat + 1) + 2
 
     local inputs = torch.zeros(total_elems, sample_size)
     local targets = torch.zeros(total_elems, sample_size)
     local expect_out = {}
 
-    local seq = tasks.generate_sequence(n_sample, sample_size)
-    inputs[1] = tasks.create_sample({1, sample_size}, true, {1,0})
-    inputs[n_sample + 2] = tasks.create_sample({1, sample_size}, true, {1,0})
-    inputs[{{2, n_sample + 1},{}}] = seq
+    local seq = tasks.generate_sequence(n_sample, sample_size, {0})
+    inputs[{{1, n_sample},{}}] = seq
+    inputs[n_sample + 1] = tasks.create_sample({1, sample_size}, true, {1})
 
-    local beg_ind = n_sample + 3
+    local beg_ind = n_sample + 2
     for i=1,n_repeat do
         targets[{{beg_ind, beg_ind + n_sample -1 },{}}] = seq
         beg_ind = beg_ind + n_sample
     end
-    targets[-1] = tasks.create_sample({1, sample_size}, true, {0,1})
+    targets[-1] = tasks.create_sample({1, sample_size}, true, {1})
 
     for i=1,total_elems do
-        expect_out[i] = i > n_sample + 2 or force_zero
+        expect_out[i] = i > n_sample + 1 or force_zero
     end
 
     return inputs, targets, expect_out
@@ -89,7 +88,7 @@ function tasks.generate_associative_racall_sequence(sequence_size, item_length, 
     for i=1,sequence_size  do
         inputs[{{beg_ind - 1},{}}] = tasks.create_sample({1, sample_size}, true, {1,0})
 
-        seq = tasks.generate_sequence(item_length, sample_size)
+        seq = tasks.generate_sequence(item_length, sample_size, {0,0})
         inputs[{{beg_ind, beg_ind + item_length - 1},{}}] = seq
         if i == key_item then
             inputs[{{key_ind, key_ind + item_length - 1},{}}] = seq
@@ -190,6 +189,8 @@ function tasks.launch_task(task_params, ntm_params, optim_params, seed)
 
                 io.write('\nInputs :\n')
                 io.write(tostring(inputs))
+                print(targets)
+                print(expect_out)
 
                 io.write('\nOutputs :\n')
                 -- io.write(tostring(real_outs))
