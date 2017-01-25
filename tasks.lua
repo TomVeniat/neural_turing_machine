@@ -189,8 +189,6 @@ function tasks.launch_task(task_params, ntm_params, optim_params, seed)
 
                 io.write('\nInputs :\n')
                 io.write(tostring(inputs))
-                print(targets)
-                print(expect_out)
 
                 io.write('\nOutputs :\n')
                 -- io.write(tostring(real_outs))
@@ -210,7 +208,7 @@ function tasks.launch_task(task_params, ntm_params, optim_params, seed)
                 io.flush()
             end
 
-            if i % task_params.save_period == 1 then
+            if i % task_params.save_period == 0 then
                 local var_name = '%s/%d-%.5f.params'
                 torch.save(var_name:format(save_dir,i,torch.Tensor(running_error):mean()), model_params)
             end
