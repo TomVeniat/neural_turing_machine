@@ -6,7 +6,7 @@ local tasks = require 'tasks'
 
 local sim_params = {
 	--Total sequence number used for training
-	n_epochs = 25000,
+	n_epochs = 200,
 	--Training sequence length bounds
 	min_seq_len = 1,
 	max_seq_len = 10,
@@ -25,8 +25,8 @@ local sim_params = {
 }
 
 local ntm_params = {
-    input_size = 9,
-    output_size = 9,
+    input_size = 7,
+    output_size = 7,
     mem_locations = 128,
     mem_location_size = 20,
     hidden_state_size = 100,
@@ -60,15 +60,17 @@ function data_gen_assoc_recall()
 	return tasks.generate_associative_racall_sequence(seq_len, item_length, key_index, ntm_params.input_size, sim_params.force_zero)
 end
 
-sim_params.force_zero = false
-sim_params.task_name = 'rep_copy_no_force'
 sim_params.data_gen = data_gen_rep_copy
 
-tasks.launch_task(sim_params, ntm_params, rmsprop_config, 0)
+local test_force = {true, false}
 
+for i=0,5 do
+	for k,v in ipairs(test_force) do
+		local task_name = 'rep_cop/rep_copy_force='..tostring(v)..'_seed='..i
 
-sim_params.force_zero = true
-sim_params.task_name = 'rep_copy_force'
-sim_params.data_gen = data_gen_rep_copy
+		sim_params.force_zero = v
+		sim_params.task_name = task_name
+		tasks.launch_task(sim_params, ntm_params, rmsprop_config, i)
+	end
+end
 
-tasks.launch_task(sim_params, ntm_params, rmsprop_config, 0)

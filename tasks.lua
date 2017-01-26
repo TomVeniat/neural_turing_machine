@@ -184,8 +184,8 @@ function tasks.launch_task(task_params, ntm_params, optim_params, seed)
             end
 
             if i % task_params.print_period == 1 then
-                local string_sep = '\n%s\nIteration n°%d\t time : %fs\n'
-                io.write(string_sep:format(sep:rep(30), i, t-s))
+                local string_sep = '\n%s\nIteration n°%d\t time : %fs\t%s\n'
+                io.write(string_sep:format(sep:rep(30), i, t-s, task_params.task_name))
 
                 io.write('\nInputs :\n')
                 io.write(tostring(inputs))
