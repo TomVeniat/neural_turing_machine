@@ -14,8 +14,8 @@ local ntm_params = {
 
 local ntm = nn.NTM(ntm_params)
 
--- Parameters of a model trained with sequences of length 25.
 -- Model trained with zeros as target for the input phase.
+-- input size : 7, output size : 7, n memeory slots : 128
 local loaded_params = torch.load('parameters/rep_cop/25000-0.00004.params')
 
 
@@ -23,12 +23,11 @@ local ntm_p, ntm_g = ntm:getParameters()
 ntm_p:copy(loaded_params)
 
 
-local min_seq_len = 2
+local min_seq_len = 5
 local max_seq_len = 5
 
 local crit = nn.BCECriterion()
 
-io.write('Sequence length\t\tError\n')
 for i = min_seq_len, max_seq_len do
     local seq_len = i
     local n_repeat = 5
@@ -46,18 +45,20 @@ for i = min_seq_len, max_seq_len do
         end
     end
 
-       err = err / n_out
+    err = err / n_out
+
+    io.write('Input : \n')
     print(inputs)
 
+    io.write('Output : \n')
     print(out)
 
     local diff = (targets - out):abs() 
+    io.write('Error : \n')
     print (diff)
 
-
-
     gnuplot.figure(1)
-    gnuplot.imagesc(inputs:t(),'jet')
+    gnuplot.imagesc(inputs:t(),'color')
 
     gnuplot.figure(2)
     gnuplot.imagesc(out:t(),'color')
@@ -65,6 +66,9 @@ for i = min_seq_len, max_seq_len do
     gnuplot.figure(3)
     gnuplot.imagesc(diff:t(),'color')
 
+
+
+    io.write('Sequence length\t\tError\n')
     local str_format = '%d\t\t\t%f\n'
     io.write(str_format:format(seq_len, err))
     io.flush()
