@@ -31,8 +31,8 @@ local ntm_p, ntm_g = ntm:getParameters()
 ntm_p:copy(loaded_params)
 
 
-local min_seq_len = 42
-local max_seq_len = 42
+local min_seq_len = 37
+local max_seq_len = 37
 
 local crit = nn.BCECriterion()
 
