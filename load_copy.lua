@@ -17,11 +17,11 @@ local ntm = nn.NTM(ntm_params)
 -- Parameters of a model trained with sequences of length 25.
 -- Trained with zeros as targets for input phase :
 -- input size : 9, output size : 9, n memeory slots : 128
-local loaded_params = torch.load('parameters/copy_force/24.01.2017_14:26:31_len=1-20_lr=0.0001/25000-0.00001.params')
+local loaded_params = torch.load('parameters/copy/copy_force/24.01.2017_14:26:31_len=1-20_lr=0.0001/25000-0.00001.params')
 
 -- Trained without specific output target for input phase :
 -- input size : 9, output size : 9, n memeory slots : 128
--- local loaded_params = torch.load('parameters/copy_no_force/24.01.2017_12:32:00_len=1-20_lr=0.0001/25000-0.00002.params')
+-- local loaded_params = torch.load('parameters/copy/copy_no_force/24.01.2017_12:32:00_len=1-20_lr=0.0001/25000-0.00002.params')
 
 -- Smaller model : input size : 7, output size : 7, n memeory slots : 10
 -- local loaded_params = torch.load('parameters/copy/toy/copy_force=false_seed=1/29.01.2017_10:58:15_len=1-7_lr=0.0001/25000-0.00002.params')
