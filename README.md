@@ -5,7 +5,7 @@ Original article : https://arxiv.org/abs/1410.5401
 
 # Test
 
-To test the different pre trained model just run the associated file :
+To test a pre-trained model on a specific task, just run the associated file :
  * Copy task : `load_copy.lua`
  * Repeat copy task : `load_rep_copy.lua`
  * Association recall task : `load_assoc.lua`
